@@ -32,9 +32,9 @@ Send the RTT rather than a pre-subtracted budget, because the SLA has several th
 
 Send one session index, the frontier of everything the session has observed, and anchor both causal levels on it. One log position suffices because everything causally before an entry has a smaller index in the single Raft log, so a view that covers the frontier covers the whole transitive causal past. A read advances the frontier to the reply's per-key value index, not to the node's log head, so a session is never bound to unrelated writes the node happened to hold. Anchoring causal-majority on the same frontier as causal-local is what makes it strictly stronger: a committed view that covers the frontier implies a local view that does. The alternative, a separate majority-acknowledged index for causal-majority, would let a wc:1-acknowledged write stay invisible to the session's own committed reads and would break the strength ordering every ranking component assumes. The residual cost is a wait on the position of a wc:1 write that a leader change later rolls back; since the anchor is a position, that wait ends as soon as any entry commits there, and the wait bound caps it regardless.
 
-Response carries: the status (ok, redirect with leader hint, rejected, or deadline exceeded), the level actually delivered, the node's current log index and commit index, the server-side service time and whether the request waited, and for reads the value the delivered level served with its write index plus both views of the key (the local value and its write index, the committed value and its write index), or for writes the entry's index. The client grades from the indices and the delivered level alone (step 7) and surfaces whichever view's value won; the served value is one of the two views and exists for the server's own diagnostics. The reply also carries the server's own rung and profit diagnostics on the Chameleon path, which no client logic reads.
+Response carries: the status (ok, redirect with leader hint, rejected, or deadline exceeded), the level actually delivered, the node's current log index and commit index, the server-side service time, and for reads the write index of the local view's value and of the committed view's value, or for writes the entry's index. The client grades from these fields alone (step 7) and credits whichever view pays more. The reply also carries the Chameleon scorer's predicted profit, so the ledger can record prediction against realization, plus ledger-only diagnostics: whether the request waited, whether the wait expired and fell back, and the write index of the value the delivered level served.
 
-The service time is required. Clients estimate RTT by subtracting it from observed end-to-end latency, using replies that involved no waiting. Without it the RTT estimate absorbs server-side work and inflates under load, which is exactly backwards.
+The service time is required. Clients estimate RTT by subtracting it from observed end-to-end latency. It spans frame receipt to reply write on the server's clock, so it contains any queueing or waiting and every reply, waited or not, is a valid sample. Without it the RTT estimate absorbs server-side work and inflates under load, which is exactly backwards.
 
 ## Server state
 
@@ -73,7 +73,8 @@ For each legal level `c`, compute the gap it must close before it can be served:
 - eventual-local, eventual-majority: gap is zero, both values are already local
 - causal-local: `gap = session_index - local_log_index`
 - causal-majority: `gap = session_index - commit_index`
-- linearizable and write concerns: no gap dimension, they wait on rounds rather than indices
+- linearizable: the same gap as causal-majority, since the read waits for the larger of the confirmed read index and the session frontier, on top of the leadership round
+- write concerns: no gap dimension, they wait on replication acks rather than indices, so they always use the `gap <= 0` bucket
 
 Bucket the gap coarsely based on the maximum batch size, for example into buckets for `gap <= 0`, `1..2000`, `2001..20000`, `> 20000`. Everything at or below zero lands in the same bucket, whose observed waits are near zero, so the case where an upgrade is free emerges from measured data rather than from a special rule.
 
@@ -181,7 +182,7 @@ Histogram cells use fixed geometric bucket edges, for example 64 buckets from 0.
 
 On each tick, multiply every bucket count, running sum, and running count by a decay factor, then rebuild the prefix-sum array and publish it. Old observations fade geometrically, giving an effective memory of roughly `interval / (1 - decay)`, so 100 ms and 0.95 gives about 2000 ms; tune the decay for the memory you want. The reference configs use 0.9, about 1000 ms.
 
-Requests read the published snapshot and never block on the refresh. The snapshot is up to one tick stale, which is far below the estimate's own variance. With around 24 cells at 64 buckets a full sweep is about 1500 operations.
+Requests read the published snapshot and never block on the refresh. The snapshot is up to one tick stale, which is far below the estimate's own variance. The grid is 5 read levels plus majority write concerns, times 4 gap buckets, but only the three index-waiting read levels use more than the first gap bucket, so 17 of the 32 cells ever hold samples (14 in a 3-node cluster). The refresh sweeps every allocated cell regardless, so at 64 buckets a tick is 2048 bucket decays plus as many prefix-sum entries, a few thousand operations.
 
 ### Price controller, once per control interval
 

@@ -63,7 +63,7 @@ class MultiSiteTransportTest {
                 KvResponse read = call(transport, 1, leader.nodeId(),
                         TestSession.readRequest("msite", 60, 1, -1).setRequestId(id++));
                 assertTrue(read.getOk(), "read via site 1 must be served");
-                assertEquals("v0", read.getValue());
+                assertEquals(write.getValueIndex(), read.getValueIndex());
 
                 // The site-less entry point is only for single-site transports.
                 assertThrows(IllegalStateException.class, () -> transport.execute(

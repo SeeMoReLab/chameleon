@@ -34,12 +34,10 @@ class DumbPathTest {
                 assertTrue(read.getOk());
                 assertFalse(read.getWaited(), "plain dumb reads never wait");
                 assertEquals(ReadLevel.EVENTUAL_MAJORITY, read.getDeliveredReadLevel());
-                assertEquals("d-value", read.getLocalValue());
-                assertTrue(read.getLocalValueIndex() >= write.getValueIndex());
+                assertEquals(write.getValueIndex(), read.getLocalValueIndex());
                 // Both view fields are populated; the committed pair may
                 // trail the local pair but never exceeds the commit index.
                 assertTrue(read.getCommittedValueIndex() <= read.getCommitIndex());
-                assertEquals(-1, read.getSatisfiedRung(), "the dumb path does not grade");
             }
         } finally {
             KvClientService.setChameleonDecisionForTest(true);
@@ -65,7 +63,7 @@ class DumbPathTest {
                 assertEquals(ReadLevel.LINEARIZABLE, read.getDeliveredReadLevel());
                 assertTrue(read.getWaited(), "the confirmation round counts as waiting");
                 assertFalse(read.getTimedOutAndFellBack());
-                assertEquals("lin-value", read.getCommittedValue());
+                assertEquals(write.getValueIndex(), read.getCommittedValueIndex());
             }
         } finally {
             KvClientService.setChameleonDecisionForTest(true);
@@ -99,7 +97,7 @@ class DumbPathTest {
                             TestSession.readRequest("flin-key", 60, 1, -1).setWantLinearizable(true));
                     assertTrue(served.getOk());
                     assertEquals(ReadLevel.LINEARIZABLE, served.getDeliveredReadLevel());
-                    assertEquals("flin-value", served.getCommittedValue());
+                    assertEquals(write.getValueIndex(), served.getCommittedValueIndex());
                 } finally {
                     KvClientService.setFollowerLinearizableReadsForTest(false);
                 }

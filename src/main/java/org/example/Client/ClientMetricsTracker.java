@@ -110,7 +110,7 @@ public final class ClientMetricsTracker {
     }
 
     /**
-     * One served response. {@code satisfiedRung} is the server-graded rung
+     * One served response. {@code satisfiedRung} is the client-graded rung
      * index (-1 = none met); {@code upgraded} means the graded delivery was
      * above the SLA's floor, split into free vs waiting by {@code waited}.
      */

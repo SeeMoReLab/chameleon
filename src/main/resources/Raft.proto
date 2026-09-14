@@ -126,33 +126,31 @@ message KvResponse {
   bool ok = 2;
   bool notLeader = 3;                // redirect: resend to leaderId
   int32 leaderId = 4;                // valid when notLeader; -1 = unknown
-  string value = 5;                  // reads; "" when the key is absent
-  int32 valueIndex = 6;              // log index of the returned value's write (write: the entry's index); -1 = absent
+  int32 valueIndex = 6;              // writes: the entry's index. Reads: log index of the value the delivered level served; -1 = absent
   ReadLevel deliveredReadLevel = 7;
   int32 deliveredWriteConcern = 8;   // replication count at acknowledgment
-  bool waited = 9;                   // request waited server-side (excluded from RTT sampling)
+  bool waited = 9;                   // request waited server-side (ledger diagnostic)
   bool timedOutAndFellBack = 10;     // wait expired; served at the strongest no-wait level
   int32 logIndex = 11;               // node's last log index at reply
   int32 commitIndex = 12;            // node's commit index at reply
   double serviceTimeMs = 13;         // reply time minus t_recv, monotonic clock
   bool rejected = 14;                // admission control shed this request (max V_c <= 0 or a hard backstop)
+  double predictedProfit = 16;       // E_c of the chosen level at decision time (chameleon* modes; the ledger's prediction column)
 
-  // Step 7 grading: what was actually delivered, not what was targeted.
-  // Populated by the chameleon* modes as server-side diagnostics; the
-  // authoritative grading for the ledger is client-side in every mode.
-  int32 satisfiedRung = 15;          // index into the registered SLA's rung list of the best rung met; -1 = none
-  double predictedProfit = 16;       // E_c of the chosen level at decision time
-  double realizedProfit = 17;        // profit of the satisfied rung; 0 when none was met
-  int32 gradedReadStrength = 18;     // strongest read level the delivered result satisfies (ReadLevel ordinal); reads only
-
-  // Both views, populated on every read in every mode: the client-side SLA
-  // check picks which value satisfies the best rung and grades accordingly.
-  string localValue = 19;            // this node's local (may-roll-back) view; "" = absent
-  int32 localValueIndex = 20;        // log index of the local value's write; -1 = absent
-  string committedValue = 21;        // this node's majority-committed view; "" = absent
-  int32 committedValueIndex = 22;    // log index of the committed value's write; -1 = absent
+  // Both views of the key, populated on every read in every mode. Grading is
+  // client-side (step 7): the client grades each view from these indices and
+  // the node's log and commit indices, credits the better-paying one, and
+  // advances its session frontier to that view's write index.
+  int32 localValueIndex = 20;        // log index of the local (may-roll-back) value's write; -1 = absent
+  int32 committedValueIndex = 22;    // log index of the majority-committed value's write; -1 = absent
   int64 serverReplyEpochMs = 23;      // wall-clock timestamp immediately before the framed response write
   bool deadlineExceeded = 24;         // expired in transport or the bounded admission queue
+
+  // 5, 19, 21 carried the served, local and committed value strings; 15, 17,
+  // 18 carried the server's own rung, realized profit and graded strength.
+  // None was read by any client logic: values are identified by index, and
+  // grading is client-side.
+  reserved 5, 15, 17, 18, 19, 21;
 }
 
 // ============================================================

@@ -6,7 +6,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.example.Utility.Grading;
 import org.example.Utility.RungScorer;
 import org.example.raft.KvRequest;
 import org.example.raft.KvResponse;
@@ -217,12 +216,10 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         return withViews(KvResponse.newBuilder()
                 .setRequestId(request.getRequestId())
                 .setOk(true)
-                .setValue(committed == null ? "" : committed.value())
                 .setValueIndex(committed == null ? -1 : committed.index())
                 .setDeliveredReadLevel(delivered)
                 .setWaited(waited)
-                .setTimedOutAndFellBack(fellBack)
-                .setSatisfiedRung(-1), request.getKey());
+                .setTimedOutAndFellBack(fellBack), request.getKey());
     }
 
     private void dumbWrite(KvRequest request, long tRecvNanos, KvResponseSink out) {
@@ -265,8 +262,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 .setValueIndex(entryIndex)
                 .setDeliveredWriteConcern(deliveredWriteConcern)
                 .setWaited(waited)
-                .setTimedOutAndFellBack(fellBack)
-                .setSatisfiedRung(-1);
+                .setTimedOutAndFellBack(fellBack);
     }
 
     /**
@@ -281,9 +277,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         KvStore.Versioned local = node.kv.readLocal(key);
         KvStore.Versioned committed = node.kv.readCommitted(key);
         return reply
-                .setLocalValue(local == null ? "" : local.value())
                 .setLocalValueIndex(local == null ? -1 : local.index())
-                .setCommittedValue(committed == null ? "" : committed.value())
                 .setCommittedValueIndex(committed == null ? -1 : committed.index());
     }
 
@@ -463,7 +457,8 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
     /**
      * Terminal read path: file the sample (step 8: under the chosen level; at
      * the bound when the wait was abandoned), release any cold-start rider,
-     * grade what was actually delivered (step 7), and reply.
+     * and reply. Grading (step 7) is the client's job, from the reply's
+     * indices.
      */
     private void completeRead(KvRequest request, long tRecvNanos, KvResponseSink out, Candidate chosen,
             ReadLevel delivered, KvStore.Versioned versioned, boolean waited, boolean fellBack, long abandonedAtMs) {
@@ -471,30 +466,14 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         plane.fileServiceTime(chosen.levelIndex, chosen.gapBucket, fellBack ? abandonedAtMs : serviceMs);
         releaseRider(chosen);
 
-        // Step 7: grade against the state that served the value. Realized
-        // profit is judged on the client's total time, service plus rho.
-        int valueIndex = versioned == null ? -1 : versioned.index();
-        int commitIndex = node.currentCommitIndex();
-        boolean localView = delivered == ReadLevel.EVENTUAL_LOCAL || delivered == ReadLevel.CAUSAL_LOCAL;
-        int graded = Grading.gradeRead(delivered, valueIndex, commitIndex,
-                localView ? node.lastLogIndex() : commitIndex,
-                request.getSessionIndex());
-        Grading.Realized realized = Grading.realize(
-                SlaRegistry.readSla(request.getApplicationId(), request.getSlaId()),
-                graded, serviceMs + request.getRttEstimateMs());
-
         send(out, withViews(KvResponse.newBuilder()
                 .setRequestId(request.getRequestId())
                 .setOk(true)
-                .setValue(versioned == null ? "" : versioned.value())
-                .setValueIndex(valueIndex)
+                .setValueIndex(versioned == null ? -1 : versioned.index())
                 .setDeliveredReadLevel(delivered)
                 .setWaited(waited)
                 .setTimedOutAndFellBack(fellBack)
-                .setSatisfiedRung(realized.rungIndex())
-                .setRealizedProfit(realized.profit())
-                .setPredictedProfit(chosen.scored.expectedProfit())
-                .setGradedReadStrength(graded), request.getKey()), tRecvNanos);
+                .setPredictedProfit(chosen.scored.expectedProfit()), request.getKey()), tRecvNanos);
     }
 
     // ===== Writes =====
@@ -571,12 +550,6 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
             plane.releaseUncalibratedRider(plane.writeLevelIndex(chosen.levelIndex), chosen.gapBucket);
         }
 
-        // Step 7: writes cannot be upgraded after the fact; the graded
-        // strength is the replication count at acknowledgment.
-        Grading.Realized realized = Grading.realize(
-                SlaRegistry.writeSla(request.getApplicationId(), request.getSlaId()),
-                deliveredWriteConcern, serviceMs + request.getRttEstimateMs());
-
         send(out, stamp(KvResponse.newBuilder())
                 .setRequestId(request.getRequestId())
                 .setOk(true)
@@ -584,8 +557,6 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 .setDeliveredWriteConcern(deliveredWriteConcern)
                 .setWaited(waited)
                 .setTimedOutAndFellBack(fellBack)
-                .setSatisfiedRung(realized.rungIndex())
-                .setRealizedProfit(realized.profit())
                 .setPredictedProfit(chosen.scored.expectedProfit()), tRecvNanos);
     }
 
@@ -626,7 +597,6 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 .setRequestId(request.getRequestId())
                 .setOk(false)
                 .setNotLeader(true)
-                .setSatisfiedRung(-1)
                 .setLeaderId(node.leaderIdHint());
     }
 
@@ -635,20 +605,17 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 .setRequestId(request.getRequestId())
                 .setOk(false)
                 .setRejected(true)
-                .setSatisfiedRung(-1)
                 .setLeaderId(-1);
     }
 
     private KvResponse.Builder failure(KvRequest request) {
         return stamp(KvResponse.newBuilder()).setRequestId(request.getRequestId()).setOk(false)
-                .setSatisfiedRung(-1)
                 .setLeaderId(-1);
     }
 
     private KvResponse.Builder deadlineExceeded(KvRequest request) {
         return stamp(KvResponse.newBuilder()).setRequestId(request.getRequestId()).setOk(false)
                 .setDeadlineExceeded(true)
-                .setSatisfiedRung(-1)
                 .setLeaderId(-1);
     }
 

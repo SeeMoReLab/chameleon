@@ -71,12 +71,12 @@ class KvLevelMechanicsTest {
 
                 // Eventual-local SLA: every level satisfies it, weakest wins.
                 KvResponse local = session.read("k1", 10, 1, -1);
-                assertEquals("va", local.getValue());
+                assertEquals(w1.getValueIndex(), local.getValueIndex());
                 assertEquals(EL, local.getDeliveredReadLevel());
 
                 // Eventual-majority SLA: EM is the weakest satisfying level.
                 KvResponse committed = session.read("k2", 11, 1, -1);
-                assertEquals("vb", committed.getValue());
+                assertEquals(w2.getValueIndex(), committed.getValueIndex());
                 assertEquals(EM, committed.getDeliveredReadLevel());
             }
         }
@@ -104,7 +104,6 @@ class KvLevelMechanicsTest {
                 assertTrue(read.getOk());
                 assertEquals(CM, read.getDeliveredReadLevel(), "only causal-majority satisfies the rung on a follower");
                 assertFalse(read.getTimedOutAndFellBack());
-                assertEquals("cv", read.getValue());
                 assertTrue(read.getValueIndex() >= anchor);
                 assertTrue(read.getCommitIndex() >= anchor);
             }
@@ -165,7 +164,7 @@ class KvLevelMechanicsTest {
                 KvResponse read = leaderSession.read("lin-key", 14, 1, -1);
                 assertTrue(read.getOk());
                 assertEquals(LIN, read.getDeliveredReadLevel());
-                assertEquals("lv", read.getValue());
+                assertEquals(write.getValueIndex(), read.getValueIndex());
                 assertTrue(read.getWaited(), "linearizable always waits for the confirmation round");
             }
         }
@@ -195,7 +194,7 @@ class KvLevelMechanicsTest {
                 KvResponse read = followerSession.read("flr-key", 16, 1, -1);
                 assertTrue(read.getOk(), "follower must serve the linearizable read itself");
                 assertEquals(LIN, read.getDeliveredReadLevel());
-                assertEquals("flr-value", read.getValue());
+                assertEquals(write.getValueIndex(), read.getValueIndex());
                 assertTrue(read.getWaited(), "the leader round trip counts as waiting");
                 assertFalse(read.getTimedOutAndFellBack());
                 assertTrue(read.getValueIndex() >= write.getValueIndex(),

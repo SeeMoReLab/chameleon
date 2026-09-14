@@ -2,12 +2,14 @@ package org.example.Client;
 
 /**
  * Per-node RTT estimation (stage 5, protocol rho): RTT = end-to-end latency
- * minus the server-reported service time, sampled only from replies that
- * involved no server-side waiting, so the estimate never absorbs server-side
- * queueing or index waits. Rejections qualify too (score and reply, no wait)
- * and must be fed: they are the only samples still flowing when a node
- * rejects everything, and without them an estimate poisoned by an overload
- * burst could never recover. The estimate is the median of a sliding window
+ * minus the server-reported service time. Service time spans frame receipt
+ * to reply write on the server's monotonic clock, so it already contains any
+ * admission queueing, replication wait or ReadIndex round; the difference is
+ * the network legs plus client-side transport time whether the request
+ * waited or not, and every reply is a sample. Rejections qualify too (score
+ * and reply) and must be fed: they are the only samples still flowing when a
+ * node rejects everything, and without them an estimate poisoned by an
+ * overload burst could never recover. The estimate is the median of a sliding window
  * per node; empty windows report 0 (optimistic cold start, consistent with
  * the scorer's free-and-certain rule for empty cells).
  */
@@ -23,15 +25,11 @@ public final class RttEstimator {
     }
 
     /**
-     * Feed one reply. Waited replies are excluded: their latency is dominated
-     * by the server-side wait, which is already inside the reported service
-     * time on the server's clock but would double-count client-side skew, and
-     * a negative difference (clock jitter) is discarded outright.
+     * Feed one reply. Both inputs are durations on their own host's clock, so
+     * there is no skew to correct; a negative difference (timer jitter) is
+     * discarded outright.
      */
-    public void observe(int nodeId, double latencyMs, double serviceTimeMs, boolean waited) {
-        if (waited) {
-            return;
-        }
+    public void observe(int nodeId, double latencyMs, double serviceTimeMs) {
         double rtt = latencyMs - serviceTimeMs;
         if (rtt >= 0) {
             windows[nodeId].add(rtt);
