@@ -17,11 +17,12 @@ import org.example.raft.ReadLevel;
  * - eventual-majority: the returned value's index is at or below the commit
  *   index, so the value is majority-committed (a committed-view read
  *   satisfies this by construction).
- * - causal-local: the view that served the value had reached the session's
- *   uncommitted anchor, so the session's acknowledged writes were visible.
+ * - causal-local: the view that served the value had reached the session
+ *   index (the session's causal frontier), so everything the session had
+ *   written or read was visible.
  * - causal-majority: the value is committed and the committed view had
- *   reached the session's latest acknowledged write, the same uncommitted
- *   session anchor used by causal-local.
+ *   reached the session index, the same frontier causal-local uses; this is
+ *   what makes causal-majority strictly stronger than causal-local.
  * - linearizable: never grantable after the fact; it requires the leadership
  *   confirmation round that only the executed path performs.
  *
@@ -45,29 +46,29 @@ public final class Grading {
      * Grade a read. {@code viewFrontierIndex} is the index frontier of the
      * view that served the value: the last log index for local-view levels,
      * the commit index for committed-view levels. Indices are the node's at
-     * grading time; {@code uncommittedAnchor} is the client session's latest
-     * acknowledged write (-1 = none) and is the causal frontier for both
-     * local and majority views.
+     * grading time; {@code sessionIndex} is the client session's causal
+     * frontier, the highest log index it has written or read (-1 = none),
+     * for both local and majority views.
      */
     public static int gradeRead(ReadLevel executed, int valueIndex, int commitIndex, int viewFrontierIndex,
-            int uncommittedAnchor) {
+            int sessionIndex) {
         int graded = ReadLevel.EVENTUAL_LOCAL.getNumber();
         boolean valueCommitted = valueIndex <= commitIndex;
-        boolean viewCoversAckedWrites = uncommittedAnchor < 0 || viewFrontierIndex >= uncommittedAnchor;
-        boolean commitCoversAckedWrites = uncommittedAnchor < 0 || commitIndex >= uncommittedAnchor;
+        boolean viewCoversFrontier = sessionIndex < 0 || viewFrontierIndex >= sessionIndex;
+        boolean commitCoversFrontier = sessionIndex < 0 || commitIndex >= sessionIndex;
         if (valueCommitted) {
             graded = Math.max(graded, ReadLevel.EVENTUAL_MAJORITY.getNumber());
         }
-        if (viewCoversAckedWrites) {
+        if (viewCoversFrontier) {
             graded = Math.max(graded, ReadLevel.CAUSAL_LOCAL.getNumber());
         }
-        // A causal-majority view must make every acknowledged session write
-        // visible after it becomes committed. The same client-owned causal
-        // anchor therefore gates both causal levels.
-        if (valueCommitted && commitCoversAckedWrites) {
+        // A causal-majority view must make everything the session has
+        // observed visible once committed. The same client-owned frontier
+        // therefore gates both causal levels.
+        if (valueCommitted && commitCoversFrontier) {
             graded = Math.max(graded, ReadLevel.CAUSAL_MAJORITY.getNumber());
         }
-        if (executed == ReadLevel.LINEARIZABLE && valueCommitted && commitCoversAckedWrites) {
+        if (executed == ReadLevel.LINEARIZABLE && valueCommitted && commitCoversFrontier) {
             graded = ReadLevel.LINEARIZABLE.getNumber();
         }
         return graded;

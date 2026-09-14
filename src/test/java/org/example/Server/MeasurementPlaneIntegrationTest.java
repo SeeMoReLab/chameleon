@@ -48,7 +48,7 @@ class MeasurementPlaneIntegrationTest {
                 for (int i = 0; i < 300; i++) {
                     int app = (i % 2 == 0) ? 20 : 21;
                     session.write("k" + (i % 10), "v" + i, app, 1);
-                    session.read("k" + (i % 10), app, 1, -1, -1);
+                    session.read("k" + (i % 10), app, 1, -1);
                 }
 
                 // Let the refresh tick publish and the last replies settle.
@@ -99,7 +99,7 @@ class MeasurementPlaneIntegrationTest {
                 // expires, the fallback serves, and the sample lands in the
                 // causal-local far-gap cell at the bound.
                 int unreachable = follower.lastLogIndex() + 100_000;
-                KvResponse readResponse = session.read("any", 22, 1, -1, unreachable);
+                KvResponse readResponse = session.read("any", 22, 1, unreachable);
                 assertTrue(readResponse.getTimedOutAndFellBack());
                 assertEquals(ReadLevel.EVENTUAL_LOCAL, readResponse.getDeliveredReadLevel());
 

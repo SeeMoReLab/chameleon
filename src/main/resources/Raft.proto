@@ -102,8 +102,12 @@ message KvRequest {
   bool isRead = 4;
   string key = 5;
   string value = 6;                  // writes only
-  int32 committedSessionIndex = 7;   // highest majority-acknowledged session write; -1 = none
-  int32 uncommittedSessionIndex = 8; // highest acknowledged write; causal anchor for CL and CM; -1 = none
+  // The session's causal frontier: the highest log index of anything the
+  // session has written or read (-1 = none). Causal levels wait for the
+  // serving view to cover it. One log position suffices because everything
+  // causally before an entry has a smaller index in the single Raft log.
+  int32 sessionIndex = 8;
+  reserved 7; // was committedSessionIndex; never consumed by any reader
   double rttEstimateMs = 9;          // client's RTT estimate to this server
 
   // 10, 11 were the stage 2 forced-level fields, removed with the scorer.

@@ -70,12 +70,12 @@ class KvLevelMechanicsTest {
                                 + " entry=" + w2.getValueIndex());
 
                 // Eventual-local SLA: every level satisfies it, weakest wins.
-                KvResponse local = session.read("k1", 10, 1, -1, -1);
+                KvResponse local = session.read("k1", 10, 1, -1);
                 assertEquals("va", local.getValue());
                 assertEquals(EL, local.getDeliveredReadLevel());
 
                 // Eventual-majority SLA: EM is the weakest satisfying level.
-                KvResponse committed = session.read("k2", 11, 1, -1, -1);
+                KvResponse committed = session.read("k2", 11, 1, -1);
                 assertEquals("vb", committed.getValue());
                 assertEquals(EM, committed.getDeliveredReadLevel());
             }
@@ -100,7 +100,7 @@ class KvLevelMechanicsTest {
                 KvResponse write = leaderSession.write("causal-key", "cv", 12, 1);
                 int anchor = write.getValueIndex();
 
-                KvResponse read = followerSession.read("causal-key", 12, 1, -1, anchor);
+                KvResponse read = followerSession.read("causal-key", 12, 1, anchor);
                 assertTrue(read.getOk());
                 assertEquals(CM, read.getDeliveredReadLevel(), "only causal-majority satisfies the rung on a follower");
                 assertFalse(read.getTimedOutAndFellBack());
@@ -125,7 +125,7 @@ class KvLevelMechanicsTest {
             try (TestSession session = new TestSession(cluster.portOf(follower.nodeId()))) {
                 int unreachable = follower.lastLogIndex() + 100_000;
                 long start = System.nanoTime();
-                KvResponse read = session.read("any", 13, 1, -1, unreachable);
+                KvResponse read = session.read("any", 13, 1, unreachable);
                 double elapsedMs = (System.nanoTime() - start) / 1_000_000.0;
 
                 assertTrue(read.getOk());
@@ -156,13 +156,13 @@ class KvLevelMechanicsTest {
 
                 // No rung is satisfiable by any follower-legal level: the
                 // request is illegal here, so redirect rather than reject.
-                KvResponse redirected = followerSession.read("lin-key", 14, 1, -1, -1);
+                KvResponse redirected = followerSession.read("lin-key", 14, 1, -1);
                 assertFalse(redirected.getOk());
                 assertTrue(redirected.getNotLeader());
                 assertFalse(redirected.getRejected());
                 assertEquals(leader.nodeId(), redirected.getLeaderId());
 
-                KvResponse read = leaderSession.read("lin-key", 14, 1, -1, -1);
+                KvResponse read = leaderSession.read("lin-key", 14, 1, -1);
                 assertTrue(read.getOk());
                 assertEquals(LIN, read.getDeliveredReadLevel());
                 assertEquals("lv", read.getValue());
@@ -192,7 +192,7 @@ class KvLevelMechanicsTest {
                 // redirect. The follower fetches a confirmed read index from
                 // the leader, waits for its own commit index, and serves the
                 // committed write linearizably.
-                KvResponse read = followerSession.read("flr-key", 16, 1, -1, -1);
+                KvResponse read = followerSession.read("flr-key", 16, 1, -1);
                 assertTrue(read.getOk(), "follower must serve the linearizable read itself");
                 assertEquals(LIN, read.getDeliveredReadLevel());
                 assertEquals("flr-value", read.getValue());
@@ -204,6 +204,61 @@ class KvLevelMechanicsTest {
         } finally {
             KvClientService.setFollowerLinearizableReadsForTest(false);
         }
+    }
+
+    @Test
+    void readsAdvanceTheSessionFrontierToTheDeliveredValue() throws Exception {
+        SlaRegistry.registerReadSla(17, 1, List.of(read(EL, 1000, 5)));
+        SlaRegistry.registerWriteSla(17, 1, List.of(write(1, 1000, 5)));
+
+        try (TestCluster cluster = new TestCluster(19900)) {
+            ServerImpl leader = cluster.awaitLeader(15_000);
+            // Another session writes; the session under test has observed
+            // nothing yet, so the only way its frontier can reach the write
+            // is by reading the value.
+            int written;
+            try (TestSession writer = new TestSession(cluster.portOf(leader.nodeId()))) {
+                KvResponse w = writer.write("frontier-key", "v", 17, 1);
+                assertTrue(w.getOk());
+                written = w.getValueIndex();
+            }
+            try (KvSessionClient client = new KvSessionClient(17,
+                    List.of("localhost", "localhost", "localhost"), cluster.clientBasePort,
+                    org.example.Client.ClientMode.CHAMELEON, 64, 3, 8_000,
+                    Map.of(1, List.of(read(EL, 1000, 5))),
+                    Map.of(1, List.of(write(1, 1000, 5))),
+                    0.0, false, false, 0.9)) {
+                assertEquals(-1, client.sessionIndex());
+
+                client.sendRead("never-written", 1);
+                awaitQuiescent(client);
+                assertEquals(-1, client.sessionIndex(), "an absent key is not an observation");
+
+                // The read may land on a follower that has not replicated the
+                // write yet (absent, no advance); retry until the value is
+                // delivered somewhere. Once it is, the frontier must equal
+                // exactly that value's write index.
+                long deadline = System.currentTimeMillis() + 10_000;
+                while (client.sessionIndex() < 0 && System.currentTimeMillis() < deadline) {
+                    client.sendRead("frontier-key", 1);
+                    awaitQuiescent(client);
+                }
+                assertEquals(written, client.sessionIndex(),
+                        "a delivered read makes its value's write a cause of later operations");
+
+                client.sendWrite("frontier-key", "v2", 1);
+                awaitQuiescent(client);
+                assertTrue(client.sessionIndex() > written, "an acknowledged write advances the frontier");
+            }
+        }
+    }
+
+    private static void awaitQuiescent(KvSessionClient client) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 20_000;
+        while (client.pendingCount() > 0 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertEquals(0, client.pendingCount(), "all requests must resolve");
     }
 
     @Test

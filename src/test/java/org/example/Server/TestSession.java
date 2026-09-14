@@ -12,7 +12,7 @@ import org.example.raft.KvResponse;
 /**
  * Minimal test session over the real client protocol: blocking single calls
  * plus an optional async listener for load tests. Requests are SLA-driven
- * like the real client; helpers fill the session-index fields.
+ * like the real client; helpers fill the session-index field.
  */
 final class TestSession implements AutoCloseable {
 
@@ -58,22 +58,21 @@ final class TestSession implements AutoCloseable {
         return call(writeRequest(key, value, applicationId, slaId));
     }
 
-    KvResponse read(String key, int applicationId, int slaId, int committedAnchor, int uncommittedAnchor)
+    KvResponse read(String key, int applicationId, int slaId, int sessionIndex)
             throws Exception {
-        return call(readRequest(key, applicationId, slaId, committedAnchor, uncommittedAnchor));
+        return call(readRequest(key, applicationId, slaId, sessionIndex));
     }
 
     static KvRequest.Builder writeRequest(String key, String value, int applicationId, int slaId) {
         return KvRequest.newBuilder().setIsRead(false).setKey(key).setValue(value)
                 .setApplicationId(applicationId).setSlaId(slaId)
-                .setCommittedSessionIndex(-1).setUncommittedSessionIndex(-1);
+                .setSessionIndex(-1);
     }
 
-    static KvRequest.Builder readRequest(String key, int applicationId, int slaId, int committedAnchor,
-            int uncommittedAnchor) {
+    static KvRequest.Builder readRequest(String key, int applicationId, int slaId, int sessionIndex) {
         return KvRequest.newBuilder().setIsRead(true).setKey(key)
                 .setApplicationId(applicationId).setSlaId(slaId)
-                .setCommittedSessionIndex(committedAnchor).setUncommittedSessionIndex(uncommittedAnchor);
+                .setSessionIndex(sessionIndex);
     }
 
     @Override

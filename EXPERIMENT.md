@@ -2,7 +2,7 @@
 
 Reference configuration for the evaluation.
 
-Every application uses 60 sessions, each belonging to one application and one client site, and holding a single counter: the highest log index that session has observed. Key space is disjoint per application. Sessions are long-lived and never reset. An arriving request picks one session of its application uniformly, which also determines where it is issued from. Arrivals are Poisson, open loop, and there is no retry.
+Every application uses 60 sessions, each belonging to one application and one client site, and holding one counter, its causal frontier: the highest log index of anything it has written or read, advanced on every acknowledged write and every delivered read value. The key space is shared across applications, so all of them contend on the same keys. Sessions are long-lived and never reset. An arriving request picks one session of its application uniformly, which also determines where it is issued from. Injection is open loop at a fixed rate: a deterministic per-tick budget every 100 ms, not Poisson arrivals, and a stalled injector drops its missed budget rather than bursting to catch up. Rejections are terminal and never retried; redirects and transport failures are resent up to the configured retry limit.
 
 ## Topologies
 
@@ -78,6 +78,8 @@ Quorum is the leader plus Oregon and Ireland, about **80 ms** round trip. Replic
 | wc:majority | 1.2 ms + | 20 ms + | 80 ms + | Two acknowledgements |
 
 Add the client's own round trip on top. A colocated client pays 1 ms; a Singapore client pays 230 ms just to reach the leader.
+
+The linearizable row prices the leader-served path. With follower linearizable reads enabled (the reference configs enable them), a follower serves the same guarantee by fetching a confirmed read index from the leader and waiting for its own commit index to catch up, so a client near a follower pays that follower's round trip to the leader, plus any catch-up wait, instead of its own round trip to the leader.
 
 Quorum cost across the three configs is roughly 1.2, 20, and 80 ms, about two orders of magnitude. With the SLA thresholds held fixed, that is what makes rungs progressively unreachable and turns the choice of delay into a swept parameter rather than something to defend.
 
@@ -220,7 +222,7 @@ Two deliberate exemptions. No write SLA can have a leader-free rung, since write
 
 Checked against the global config from Singapore, the worst site, the only violation was A1 writes, which is why that ladder has a fourth rung at 500 ms.
 
-Because this is checkable statically from the topology and the level cost table, the system can tell an operator at startup which SLAs are unservable from which sites, instead of the operator finding out when those requests start being rejected.
+Because this is checkable statically from the topology and the level cost table, it could run at startup and tell an operator which SLAs are unservable from which sites, instead of the operator finding out when those requests start being rejected. The implementation does not perform this check; it was done by hand against the tables above, and automating it remains an open item.
 
 ## Scenario mixes
 
@@ -326,31 +328,31 @@ Weights are relative and normalised to 100. Each mix is a day in the life of the
 
 ## The day sequence
 
-One continuous run of about six minutes per arm. Rates are fractions of measured capacity C so the run is portable. Sessions persist throughout, so history and lag carry across segments, which is realistic and is also why this is the dynamics figure rather than the quantitative one.
+One continuous run of about thirty-one minutes per arm: a 30 s warm-up at normal load, the eight segments below (thirty minutes), and a 30 s cool-down, the bookends excluded from the story. Rates are fractions of measured capacity C so the run is portable. Sessions persist throughout, so history and lag carry across segments, which is realistic and is also why this is the dynamics figure rather than the quantitative one.
 
 The cluster is provisioned the way a cost-conscious operator would provision it: for ordinary peak plus headroom, not for the flash sale. Nobody buys twenty times capacity to sit idle all year, so normal load sits at half of C and the sale day exceeds it.
 
 | Segment | Duration | Rate | vs normal | Mix | What it shows |
 |---|---|---|---|---|---|
-| Normal day | 60 s | 0.5 C | 1x | normal | Baseline. The price rests on its floor and nearly everything upgrades free |
-| Holiday plateau | 60 s | 0.8 C | 1.6x | holiday | Sustained seasonal lift. Tests equilibrium rather than reaction, and is where an oscillation would appear |
-| Sale day | 60 s | 1.8 C | 3.6x | saleDay | Prime Day scale. Rate and value rise together, which is the realistic combined case |
-| Pre-flash login surge | 30 s | 1.0 C | 2x | preFlash | People gathering and signing in. Write-heavy logins drive lag up just before the burst |
-| Flash sale | 15 s | 2.5 C | 5x | flash | Roughly sixty percent of arrivals must be refused, and the floor is expensive, so downgrading is unavailable and admission is the only lever |
-| Collapse | 15 s | 0.7 C | 1.4x | collapse | Load vanishes. Does the price come down promptly or strand capacity |
-| Payday | 45 s | 0.6 C | 1.2x | payday | Composition shifts while volume barely does. The valuable tenant is the one surging |
-| Return to normal | 60 s | 0.5 C | 1x | normal | Recovery, compared directly against the opening segment |
+| Normal day | 300 s | 0.5 C | 1x | normal | Baseline. The price rests on its floor and nearly everything upgrades free |
+| Holiday plateau | 300 s | 0.8 C | 1.6x | holiday | Sustained seasonal lift. Tests equilibrium rather than reaction, and is where an oscillation would appear |
+| Sale day | 300 s | 1.8 C | 3.6x | saleDay | Prime Day scale. Rate and value rise together, which is the realistic combined case |
+| Pre-flash login surge | 120 s | 1.0 C | 2x | preFlash | People gathering and signing in. Write-heavy logins drive lag up just before the burst |
+| Flash sale | 60 s | 2.5 C | 5x | flash | Roughly sixty percent of arrivals must be refused, and the floor is expensive, so downgrading is unavailable and admission is the only lever |
+| Collapse | 120 s | 0.7 C | 1.4x | collapse | Load vanishes. Does the price come down promptly or strand capacity |
+| Payday | 300 s | 0.6 C | 1.2x | payday | Composition shifts while volume barely does. The valuable tenant is the one surging |
+| Return to normal | 300 s | 0.5 C | 1x | normal | Recovery, compared directly against the opening segment |
 
-Two deliberate compressions to state in the methodology. A holiday plateau lasts weeks in reality and sixty seconds here, which is honest because the system's slowest adaptation timescale is a few seconds, set by the histogram and acceptance-rate decay; segments meant to settle get about ten times that, and the flash sale is deliberately shorter than settling time because its point is the transient. And real flash sales reach ten to fifty times normal traffic rather than five, which was capped for load-generation reasons. The binding quantity there is the rejection fraction rather than the multiple of capacity, and at 2.5 C it is already high enough to separate value-ordered from arrival-ordered shedding; a higher peak changes the size of the gap, not its existence or its ordering.
+Two deliberate compressions to state in the methodology. A holiday plateau lasts weeks in reality and five minutes here, which is honest because the system's slowest adaptation timescale is a few seconds, set by the histogram and acceptance-rate decay; every segment is at least an order of magnitude longer than that, so each shows its settled state, and the flash segment shows the entry transient and the settled overload behaviour both. And real flash sales reach ten to fifty times normal traffic rather than five, which was capped for load-generation reasons. The binding quantity there is the rejection fraction rather than the multiple of capacity, and at 2.5 C it is already high enough to separate value-ordered from arrival-ordered shedding; a higher peak changes the size of the gap, not its existence or its ordering.
 
 This sequence does not replace a static load sweep, which is the quantitative backbone and is immune to the carryover objection: hold the mix at normal and step the rate from 0.2 C to 2.5 C, 45 seconds per step, reporting delivered profit, rejection rate, and per-level tail latency. The arms are indistinguishable below saturation, so a sweep that never crosses C will show four flat lines.
 
-If experiment time is short, the priority order is the load sweep on the geo topology for all four arms, then the day sequence on geo for all four arms, then the load sweep on the single-region control, then failure injection for the write concern result. That is roughly twelve minutes per arm per topology, so under an hour for one full replication of the geo config.
+If experiment time is short, the priority order is the load sweep on the geo topology for all four arms, then the day sequence on geo for all four arms, then the load sweep on the single-region control, then failure injection for the write concern result. The day sequence alone is about thirty-one minutes per arm per topology, so one full replication of the geo config is a matter of hours, not under an hour.
 
 ## Notes
 
 Replication lag rises with total write load, and the fraction of causal reads that must wait is roughly `min(1, (w * T / N) * lag)` per application, where `w` is its write fraction, `T` the total rate, and `N` its session count. That is why the write surge changes behaviour without changing the rate.
 
-With 50 sessions for every application regardless of its share of load, per-session activity differs: A2 at 35 percent of traffic has busy sessions with high floors, while A4 at 5 percent has quiet sessions whose counters fall behind, so more of A4's causal upgrades will be free. Its linearizable rung stays expensive regardless, so the A4 story survives, but it will show in the free-versus-waiting split.
+With 60 sessions for every application regardless of its share of load, per-session activity differs: A2 at 35 percent of traffic has busy sessions with high floors, while A4 at 5 percent has quiet sessions whose counters fall behind, so more of A4's causal upgrades will be free. Its linearizable rung stays expensive regardless, so the A4 story survives, but it will show in the free-versus-waiting split.
 
-One modelling detail to pin down in the implementation: the levels are not a total order. Causal-majority does not imply causal-local, since one is a statement about committed state and the other about log presence, and a session that wrote at wc:1 can have an uncommitted index above the committed one. For scoring, count only the rungs a level definitely satisfies, which is conservative. Post-hoc grading will award anything extra that was actually delivered.
+One modelling detail pinned down in the implementation: both causal levels anchor on the same session frontier, so causal-majority implies causal-local (a committed view that covers the frontier implies the log does) and the read ladder is a total order. For scoring, count only the rungs a level definitely satisfies, which is conservative. Post-hoc grading will award anything extra that was actually delivered.

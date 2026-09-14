@@ -539,3 +539,53 @@ Enable geo latency:
 * compare eventual vs linearizable performance
 * study WAN latency amplification
 * analyze consistency costs under network delay
+
+
+<!-- Done -->
+bash run_all_cloudlab_sweep.sh kevindmw@clnode317.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "1125" --seeds "42" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "2250" --seeds "42" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "4500" --seeds "42" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "9000" --seeds "42" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "18000" --seeds "42" "config_local.yaml"
+
+<!-- Done -->
+bash run_all_cloudlab_sweep.sh kevindmw@clnode317.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "1125" --seeds "42" "config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "2250" --seeds "42" "config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "4500" --seeds "42" "config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "9000" --seeds "42" "config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "18000" --seeds "42" "config_regional.yaml"
+
+<!-- Done -->
+bash run_all_cloudlab_sweep.sh kevindmw@clnode317.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "1125" --seeds "42" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "2250" --seeds "42" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "4500" --seeds "42" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "9000" --seeds "42" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --smax "18000" --seeds "42" "config_global.yaml"
+
+<!-- Done -->
+bash run_all_cloudlab_sweep.sh kevindmw@clnode317.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "9000" --seeds "7" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "18000" --seeds "7" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "1125" --seeds "7" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "2250" --seeds "7" "config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "4500" --seeds "7" "config_global.yaml"
+
+bash run_all_cloudlab_sweep.sh kevindmw@clnode317.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "9000" --seeds "7" "config_local.yaml;config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "18000" --seeds "7" "config_local.yaml;config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "1125" --seeds "7" "config_local.yaml;config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "2250" --seeds "7" "config_local.yaml;config_regional.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "strongest;weakest;chameleon;chameleonPileus;pileus" --smax "4500" --seeds "7" "config_local.yaml;config_regional.yaml"
+
+<!-- Done -->
+bash run_all_cloudlab_sweep.sh kevindmw@clnode317.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "2250" --seeds "100" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "4500" --seeds "100" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "9000" --seeds "100" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "18000" --seeds "100" "config_local.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "1125" --seeds "100" "config_local.yaml"
+
+<!-- Done -->
+
+bash run_all_cloudlab_sweep.sh kevindmw@clnode317.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "2250" --seeds "100" "config_regional.yaml;config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "4500" --seeds "100" "config_regional.yaml;config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "9000" --seeds "100" "config_regional.yaml;config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "18000" --seeds "100" "config_regional.yaml;config_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "1125" --seeds "100" "config_regional.yaml;config_global.yaml"

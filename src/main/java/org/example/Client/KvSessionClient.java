@@ -11,7 +11,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.example.Utility.RungScorer;
 import org.example.raft.KvRequest;
@@ -23,9 +22,9 @@ import io.grpc.Status;
 /**
  * One logical application session against the cluster. It shares an
  * asynchronous framed transport with the other sessions and owns the
- * session anchors (uncommitted = highest log index among this session's
- * acknowledged writes; committed = highest among its majority-acknowledged
- * writes), a per-node RTT estimator fed by no-wait replies, and the client
+ * session index (the session's causal frontier: the highest log index of
+ * anything it has written or read), a per-node RTT estimator fed by no-wait
+ * replies, and the client
  * side of the experiment arm ({@link ClientMode}):
  *
  * - chameleon: reads to the lowest-RTT node, the server scorer decides.
@@ -88,16 +87,15 @@ public final class KvSessionClient implements AutoCloseable {
     private final AtomicInteger roundRobin = new AtomicInteger();
     private volatile int leaderHint = -1;
 
-    // Session histories carried by subsequent requests. One atomic snapshot
-    // preserves uncommitted >= committed while write callbacks and workload
-    // threads run concurrently. The uncommitted value is the causal frontier
-    // for both causal-local and causal-majority; committed remains useful as
-    // explicit majority-acknowledgement history.
-    private record SessionAnchors(int uncommitted, int committed) {
-    }
-
-    private final AtomicReference<SessionAnchors> sessionAnchors =
-            new AtomicReference<>(new SessionAnchors(-1, -1));
+    // The session's causal frontier: the highest log index of anything this
+    // session has written or read (-1 = none). Every request carries it and
+    // the causal levels wait for the serving view to cover it. It advances on
+    // the final delivered response of a write (the entry's index, wc:1
+    // included) or a read (the index of the value the grader credited);
+    // rejected, lost, and absent-key results do not move it. Grading always
+    // uses the value a request was sent with, never the live one, so a read's
+    // causal obligation is fixed at the moment it is issued.
+    private final AtomicInteger sessionIndex = new AtomicInteger(-1);
 
     private final ConcurrentHashMap<Long, Pending> pending = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -239,9 +237,7 @@ public final class KvSessionClient implements AutoCloseable {
     // ===== Sending =====
 
     public void sendRead(String key, int slaId) {
-        SessionAnchors anchors = sessionAnchors.get();
-        int uncommitted = anchors.uncommitted();
-        int committed = anchors.committed();
+        int sessionIndex = this.sessionIndex.get();
 
         List<RungScorer.Rung> sla = slaOf(readSlas, slaId);
         AdmitRates admitRates = admitRatesFor(true, slaId);
@@ -252,12 +248,12 @@ public final class KvSessionClient implements AutoCloseable {
         switch (mode) {
             case CHAMELEON -> targetNode = lowestRttNode(admitRates);
             case CHAMELEON_PILEUS -> {
-                PileusSelector.Choice choice = selector.chooseRead(sla, uncommitted, leaderHint,
+                PileusSelector.Choice choice = selector.chooseRead(sla, sessionIndex, leaderHint,
                         admitRates);
                 targetNode = choice == null ? lowestRttNode(admitRates) : choice.node();
             }
             case PILEUS -> {
-                PileusSelector.Choice choice = selector.chooseRead(sla, uncommitted, leaderHint,
+                PileusSelector.Choice choice = selector.chooseRead(sla, sessionIndex, leaderHint,
                         admitRates);
                 if (choice == null) {
                     targetNode = lowestRttNode(admitRates);
@@ -283,8 +279,7 @@ public final class KvSessionClient implements AutoCloseable {
                 .setSlaId(slaId)
                 .setIsRead(true)
                 .setKey(key)
-                .setCommittedSessionIndex(committed)
-                .setUncommittedSessionIndex(uncommitted);
+                .setSessionIndex(sessionIndex);
         if (targetRung != null) {
             request.setWantLinearizable(targetRung.strength() == ReadLevel.LINEARIZABLE.getNumber());
         }
@@ -314,7 +309,7 @@ public final class KvSessionClient implements AutoCloseable {
             }
         }
 
-        SessionAnchors anchors = sessionAnchors.get();
+        int sessionIndex = this.sessionIndex.get();
         KvRequest.Builder request = KvRequest.newBuilder()
                 .setRequestId(requestIdGen.incrementAndGet())
                 .setApplicationId(applicationId)
@@ -322,8 +317,7 @@ public final class KvSessionClient implements AutoCloseable {
                 .setIsRead(false)
                 .setKey(key)
                 .setValue(value)
-                .setCommittedSessionIndex(anchors.committed())
-                .setUncommittedSessionIndex(anchors.uncommitted());
+                .setSessionIndex(sessionIndex);
         if (targetRung != null) {
             request.setRequestedWriteConcern(Math.min(Math.max(1, targetRung.strength()), majority));
         }
@@ -560,8 +554,12 @@ public final class KvSessionClient implements AutoCloseable {
                                 || response.getDeliveredReadLevel() == ReadLevel.LINEARIZABLE,
                         latencyMs);
             }
+            // Grade against the frontier this request was sent with (its
+            // causal obligation was fixed at issue time), then let the value
+            // it delivered become a cause of everything the session does next.
             verdict = ClientGrader.gradeRead(slaOf(readSlas, request.getSlaId()), response,
-                    request.getUncommittedSessionIndex(), latencyMs);
+                    request.getSessionIndex(), latencyMs);
+            advanceSessionIndex(verdict.creditedValueIndex());
             upgraded = verdict.gradedStrength() > readFloors.get(request.getSlaId());
             if (selector != null && entry.targetStrength >= 0) {
                 // Close the served-below-target loop: the latency window
@@ -579,17 +577,24 @@ public final class KvSessionClient implements AutoCloseable {
             }
             verdict = ClientGrader.gradeWrite(slaOf(writeSlas, request.getSlaId()), response, latencyMs);
             upgraded = response.getDeliveredWriteConcern() > writeFloors.get(request.getSlaId());
-            boolean majorityAcknowledged = response.getDeliveredWriteConcern() >= majority
-                    && !response.getTimedOutAndFellBack();
-            sessionAnchors.updateAndGet(current -> new SessionAnchors(
-                    Math.max(current.uncommitted(), index),
-                    majorityAcknowledged ? Math.max(current.committed(), index) : current.committed()));
+            advanceSessionIndex(index);
         }
 
         double predicted = mode.chameleonDecision() ? response.getPredictedProfit() : entry.predictedProfit;
         ClientMetricsTracker.recordResponse(nodeId, siteName, chosen, executed, latencyMs,
                 response.getTimedOutAndFellBack(), verdict.deadlineViolation(),
                 predicted, verdict.realizedProfit(), verdict.satisfiedRung(), upgraded, response.getWaited());
+    }
+
+    /** The session's current causal frontier (-1 = nothing observed yet). */
+    public int sessionIndex() {
+        return sessionIndex.get();
+    }
+
+    private void advanceSessionIndex(int observedIndex) {
+        if (observedIndex >= 0) {
+            sessionIndex.accumulateAndGet(observedIndex, Math::max);
+        }
     }
 
     private void handleRpcError(int nodeId, Pending entry, KvFramedTransport.RpcFailure failure) {

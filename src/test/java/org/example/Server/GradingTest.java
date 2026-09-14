@@ -32,7 +32,7 @@ class GradingTest {
     @Test
     void replicaAtOrAheadOfSessionIndexUpgradesEventualToCausal() {
         // Executed eventual-local on a replica whose log frontier covers the
-        // session's uncommitted anchor: causal-local is satisfied even though
+        // session index: causal-local is satisfied even though
         // eventual was executed. The value itself is uncommitted, so the
         // majority levels are not.
         int graded = Grading.gradeRead(EVENTUAL_LOCAL, 9, 7, 10, 8);

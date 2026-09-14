@@ -155,7 +155,7 @@ public class WorkloadDriver {
     private static final List<ManagedChannel> adminChannels = new ArrayList<>();
     // appSessions[app][session]: independent session clients per application,
     // drawn uniformly per request. Every session carries its own full client
-    // state (session anchors, per-key floors, RTT windows, Pileus windows);
+    // state (session index, per-key floors, RTT windows, Pileus windows);
     // only the framed transport and metrics ledger are shared.
     private static KvSessionClient[][] appSessions;
     private static KvFramedTransport framedTransport;

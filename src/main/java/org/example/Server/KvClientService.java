@@ -182,7 +182,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 ? node.confirmLeadership()
                 : node.readIndexFromLeader();
         return confirmed.thenCompose(readIndex -> {
-            int requiredIndex = Math.max(readIndex, request.getUncommittedSessionIndex());
+            int requiredIndex = Math.max(readIndex, request.getSessionIndex());
             return node.currentCommitIndex() >= requiredIndex
                     ? CompletableFuture.completedFuture(null)
                     : node.awaitCommitIndex(requiredIndex);
@@ -363,16 +363,16 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         int maxLevel = (leader || FOLLOWER_LINEARIZABLE_READS) ? READ_LEVELS - 1 : READ_LEVELS - 2;
         double rho = effectiveRttMs(request, out);
         double lambda = plane.lambda();
-        int uncommittedAnchor = request.getUncommittedSessionIndex();
+        int sessionIndex = request.getSessionIndex();
 
         List<Candidate> candidates = new ArrayList<>(READ_LEVELS);
         int satisfiableAnywhere = 0;
         for (int level = 0; level <= maxLevel; level++) {
             // Step 3: the gap each level must close, bucketed coarsely.
             long gap = switch (ReadLevel.forNumber(level)) {
-                case CAUSAL_LOCAL -> (long) uncommittedAnchor - node.lastLogIndex();
+                case CAUSAL_LOCAL -> (long) sessionIndex - node.lastLogIndex();
                 case CAUSAL_MAJORITY, LINEARIZABLE ->
-                    (long) uncommittedAnchor - node.currentCommitIndex();
+                    (long) sessionIndex - node.currentCommitIndex();
                 default -> 0L;
             };
             Candidate candidate = scoreLevel(sla, level, level, ServiceTimeHistograms.gapBucketOf(gap), rho, lambda);
@@ -411,7 +411,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
             case EVENTUAL_MAJORITY -> completeRead(request, tRecvNanos, out, chosen, ReadLevel.EVENTUAL_MAJORITY,
                     node.kv.readCommitted(key), false, false, 0);
             case CAUSAL_LOCAL -> {
-                int anchor = request.getUncommittedSessionIndex();
+                int anchor = request.getSessionIndex();
                 if (anchor < 0 || node.lastLogIndex() >= anchor) {
                     completeRead(request, tRecvNanos, out, chosen, ReadLevel.CAUSAL_LOCAL,
                             node.kv.readLocal(key), false, false, 0);
@@ -424,7 +424,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 }
             }
             case CAUSAL_MAJORITY -> {
-                int anchor = request.getUncommittedSessionIndex();
+                int anchor = request.getSessionIndex();
                 if (anchor < 0 || node.currentCommitIndex() >= anchor) {
                     completeRead(request, tRecvNanos, out, chosen, ReadLevel.CAUSAL_MAJORITY,
                             node.kv.readCommitted(key), false, false, 0);
@@ -478,7 +478,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         boolean localView = delivered == ReadLevel.EVENTUAL_LOCAL || delivered == ReadLevel.CAUSAL_LOCAL;
         int graded = Grading.gradeRead(delivered, valueIndex, commitIndex,
                 localView ? node.lastLogIndex() : commitIndex,
-                request.getUncommittedSessionIndex());
+                request.getSessionIndex());
         Grading.Realized realized = Grading.realize(
                 SlaRegistry.readSla(request.getApplicationId(), request.getSlaId()),
                 graded, serviceMs + request.getRttEstimateMs());

@@ -81,8 +81,7 @@ class KvIngressAdmissionIntegrationTest {
                 .setSlaId(1)
                 .setIsRead(true)
                 .setKey("k")
-                .setCommittedSessionIndex(-1)
-                .setUncommittedSessionIndex(-1)
+                .setSessionIndex(-1)
                 .build();
     }
 }

@@ -38,7 +38,7 @@ class EconomicsIntegrationTest {
                     if (session.write("k" + (i % 10), "v" + i, 30, 1).getRejected()) {
                         rejected++;
                     }
-                    if (session.read("k" + (i % 10), 30, 1, -1, -1).getRejected()) {
+                    if (session.read("k" + (i % 10), 30, 1, -1).getRejected()) {
                         rejected++;
                     }
                 }
@@ -79,10 +79,10 @@ class EconomicsIntegrationTest {
                     boolean allWarm = false;
                     long warmDeadline = System.currentTimeMillis() + 10_000;
                     while (!allWarm && System.currentTimeMillis() < warmDeadline) {
-                        if (!session.read("k", 31, 1, -1, -1).getRejected()) {
+                        if (!session.read("k", 31, 1, -1).getRejected()) {
                             lowAcceptedAtFloor++;
                         }
-                        session.read("k", 32, 1, -1, -1);
+                        session.read("k", 32, 1, -1);
                         Thread.sleep(5);
                         allWarm = true;
                         for (int level = 0; level < 5; level++) {
@@ -107,10 +107,10 @@ class EconomicsIntegrationTest {
                     int lowRejected = 0;
                     int highAccepted = 0;
                     for (int i = 0; i < 50; i++) {
-                        if (session.read("k", 31, 1, -1, -1).getRejected()) {
+                        if (session.read("k", 31, 1, -1).getRejected()) {
                             lowRejected++;
                         }
-                        if (!session.read("k", 32, 1, -1, -1).getRejected()) {
+                        if (!session.read("k", 32, 1, -1).getRejected()) {
                             highAccepted++;
                         }
                     }
@@ -121,7 +121,7 @@ class EconomicsIntegrationTest {
                     plane.forceLambdaForTest(100_000.0 / minOmega);
                     int highRejected = 0;
                     for (int i = 0; i < 50; i++) {
-                        if (session.read("k", 32, 1, -1, -1).getRejected()) {
+                        if (session.read("k", 32, 1, -1).getRejected()) {
                             highRejected++;
                         }
                     }

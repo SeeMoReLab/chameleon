@@ -49,12 +49,12 @@ class ProfitReconciliationTest {
 
     /** Regrade one read record from nothing but the response and the request's anchors. */
     private static Grading.Realized regradeRead(List<RungScorer.Rung> sla, KvResponse response,
-            int uncommittedAnchor) {
+            int sessionIndex) {
         ReadLevel delivered = response.getDeliveredReadLevel();
         boolean localView = delivered == ReadLevel.EVENTUAL_LOCAL || delivered == ReadLevel.CAUSAL_LOCAL;
         int graded = Grading.gradeRead(delivered, response.getValueIndex(), response.getCommitIndex(),
                 localView ? response.getLogIndex() : response.getCommitIndex(),
-                uncommittedAnchor);
+                sessionIndex);
         assertEquals(graded, response.getGradedReadStrength(), "server and record grading must agree");
         return Grading.realize(sla, graded, response.getServiceTimeMs());
     }
@@ -87,7 +87,7 @@ class ProfitReconciliationTest {
 
                 // Fresh read cells tie every level at E=1 for the floor SLA
                 // and the tie breaks to the weakest: eventual-local executes.
-                KvResponse floorRead = session.read("r-key", 40, 2, -1, -1);
+                KvResponse floorRead = session.read("r-key", 40, 2, -1);
                 assertTrue(floorRead.getOk());
                 assertEquals("r-value", floorRead.getValue());
                 assertEquals(ReadLevel.EVENTUAL_LOCAL, floorRead.getDeliveredReadLevel());
@@ -100,8 +100,7 @@ class ProfitReconciliationTest {
 
                 // The majority SLA is dominated by its causal-majority rung
                 // (E 4 vs 2), which the scorer picks outright.
-                KvResponse majorityRead = session.read("r-key", 40, 1,
-                        write.getValueIndex(), write.getValueIndex());
+                KvResponse majorityRead = session.read("r-key", 40, 1, write.getValueIndex());
                 assertTrue(majorityRead.getOk());
                 assertEquals(ReadLevel.CAUSAL_MAJORITY, majorityRead.getDeliveredReadLevel());
                 assertEquals(0, majorityRead.getSatisfiedRung());
@@ -118,17 +117,13 @@ class ProfitReconciliationTest {
                 double reportedRealized = 0;
                 double regradedRealized = 0;
                 double reportedPredicted = 0;
-                int uncommitted = -1;
-                int committed = -1;
+                int sessionIndex = -1;
                 List<KvResponse> served = new ArrayList<>();
 
                 for (int i = 0; i < 30; i++) {
                     KvResponse write = session.write("k" + (i % 5), "v" + i, 40, 1);
                     assertTrue(write.getOk());
-                    uncommitted = Math.max(uncommitted, write.getValueIndex());
-                    if (write.getDeliveredWriteConcern() >= 2 && !write.getTimedOutAndFellBack()) {
-                        committed = Math.max(committed, write.getValueIndex());
-                    }
+                    sessionIndex = Math.max(sessionIndex, write.getValueIndex());
                     reportedRealized += write.getRealizedProfit();
                     reportedPredicted += write.getPredictedProfit();
                     regradedRealized += Grading.realize(WRITE_SLA, write.getDeliveredWriteConcern(),
@@ -136,12 +131,11 @@ class ProfitReconciliationTest {
                     served.add(write);
 
                     List<RungScorer.Rung> sla = (i % 2 == 0) ? READ_SLA_MAJORITY : READ_SLA_FLOOR;
-                    KvResponse readResponse = session.read("k" + (i % 5), 40, (i % 2 == 0) ? 1 : 2,
-                            committed, uncommitted);
+                    KvResponse readResponse = session.read("k" + (i % 5), 40, (i % 2 == 0) ? 1 : 2, sessionIndex);
                     assertTrue(readResponse.getOk());
                     reportedRealized += readResponse.getRealizedProfit();
                     reportedPredicted += readResponse.getPredictedProfit();
-                    regradedRealized += regradeRead(sla, readResponse, uncommitted).profit();
+                    regradedRealized += regradeRead(sla, readResponse, sessionIndex).profit();
                     served.add(readResponse);
                 }
 

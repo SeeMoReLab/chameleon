@@ -115,6 +115,43 @@ class ClientGraderTest {
     }
 
     @Test
+    void creditedValueIndexFollowsTheWinningView() {
+        // Both views pay causal-majority: the tie goes to the committed view,
+        // so the frontier advances to the committed value's write.
+        KvResponse committedWins = response(ReadLevel.EVENTUAL_MAJORITY)
+                .setLogIndex(10).setCommitIndex(10)
+                .setLocalValueIndex(9).setCommittedValueIndex(7)
+                .build();
+        assertEquals(7, ClientGrader.gradeRead(SLA, committedWins, 8, 50).creditedValueIndex());
+        // Only the local view satisfies the causal claim: its value is the
+        // one surfaced, so its write is the one the session now depends on.
+        KvResponse localWins = response(ReadLevel.EVENTUAL_LOCAL)
+                .setLogIndex(12).setCommitIndex(5)
+                .setLocalValueIndex(11).setCommittedValueIndex(4)
+                .build();
+        assertEquals(11, ClientGrader.gradeRead(SLA, localWins, 10, 50).creditedValueIndex());
+        // An absent key is not an observation.
+        KvResponse absent = response(ReadLevel.EVENTUAL_MAJORITY)
+                .setLogIndex(10).setCommitIndex(10)
+                .setLocalValueIndex(-1).setCommittedValueIndex(-1)
+                .build();
+        assertEquals(-1, ClientGrader.gradeRead(SLA, absent, -1, 50).creditedValueIndex());
+    }
+
+    @Test
+    void gradingUsesOnlyTheIndexItIsHanded() {
+        // The grader is a pure function of the index the request carried: the
+        // same response grades differently under a frontier the view covers
+        // (8) and one it does not (11), and nothing else can influence it.
+        KvResponse r = response(ReadLevel.EVENTUAL_MAJORITY)
+                .setLogIndex(10).setCommitIndex(10)
+                .setLocalValueIndex(9).setCommittedValueIndex(9)
+                .build();
+        assertEquals(0, ClientGrader.gradeRead(SLA, r, 8, 50).satisfiedRung());
+        assertEquals(2, ClientGrader.gradeRead(SLA, r, 11, 50).satisfiedRung());
+    }
+
+    @Test
     void writesGradeOnTheDeliveredConcern() {
         List<RungScorer.Rung> writeSla = List.of(
                 new RungScorer.Rung(2, 300, 8),

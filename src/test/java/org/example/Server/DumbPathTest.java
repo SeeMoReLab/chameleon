@@ -30,7 +30,7 @@ class DumbPathTest {
                 assertEquals(1, write.getDeliveredWriteConcern());
                 assertFalse(write.getWaited());
 
-                KvResponse read = session.read("d-key", 60, 1, -1, -1);
+                KvResponse read = session.read("d-key", 60, 1, -1);
                 assertTrue(read.getOk());
                 assertFalse(read.getWaited(), "plain dumb reads never wait");
                 assertEquals(ReadLevel.EVENTUAL_MAJORITY, read.getDeliveredReadLevel());
@@ -60,7 +60,7 @@ class DumbPathTest {
                 assertTrue(write.getCommitIndex() >= write.getValueIndex());
 
                 KvResponse read = session.call(
-                        TestSession.readRequest("lin-key", 60, 1, -1, -1).setWantLinearizable(true));
+                        TestSession.readRequest("lin-key", 60, 1, -1).setWantLinearizable(true));
                 assertTrue(read.getOk());
                 assertEquals(ReadLevel.LINEARIZABLE, read.getDeliveredReadLevel());
                 assertTrue(read.getWaited(), "the confirmation round counts as waiting");
@@ -88,7 +88,7 @@ class DumbPathTest {
 
                 // Flag off: redirect, same as chameleon mode.
                 KvResponse redirected = followerSession.call(
-                        TestSession.readRequest("flin-key", 60, 1, -1, -1).setWantLinearizable(true));
+                        TestSession.readRequest("flin-key", 60, 1, -1).setWantLinearizable(true));
                 assertFalse(redirected.getOk());
                 assertTrue(redirected.getNotLeader());
 
@@ -96,7 +96,7 @@ class DumbPathTest {
                 KvClientService.setFollowerLinearizableReadsForTest(true);
                 try {
                     KvResponse served = followerSession.call(
-                            TestSession.readRequest("flin-key", 60, 1, -1, -1).setWantLinearizable(true));
+                            TestSession.readRequest("flin-key", 60, 1, -1).setWantLinearizable(true));
                     assertTrue(served.getOk());
                     assertEquals(ReadLevel.LINEARIZABLE, served.getDeliveredReadLevel());
                     assertEquals("flin-value", served.getCommittedValue());

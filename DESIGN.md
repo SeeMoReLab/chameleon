@@ -14,9 +14,9 @@ Reads: eventual-local, eventual-majority, causal-local, causal-majority, lineari
 
 Local means the replica's log, which may contain uncommitted entries that a leader change can roll back. Majority means committed state. That distinction is real and must be stated in any writeup, because a reader assuming stock Raft will assume followers only apply committed entries.
 
-Causal-local waits until the local log index reaches the client's uncommitted session index. Causal-majority waits until the commit index reaches the client's committed session index. Linearizable is leader-only.
+Each session carries one causal frontier: the highest log index of anything it has written or read, advanced on every acknowledged write and on every delivered read value. Causal-local waits until the local log index reaches it; causal-majority waits until the commit index reaches it. Because reads extend the frontier, the causal levels provide the full causal order and not just read-your-writes: read-your-writes and monotonic reads come from the frontier, monotonic writes and writes-follow-writes come for free from the single log's total order. Linearizable is anchored at the leader, but followers may serve it too (below).
 
-Implement linearizable with ReadIndex, not with a no-op append and not as an entry. The leader records its commit index, confirms leadership via a heartbeat round with a majority, waits for its applied index to reach the recorded value, then serves locally. No log entry is created, and reads batch onto whatever AppendEntries round is already in flight. Consider follower linearizable reads (follower obtains the read index from the leader, waits for its own apply to catch up) as a way to relieve leader concentration.
+Implement linearizable with ReadIndex, not with a no-op append and not as an entry. The leader records its commit index, confirms leadership via a heartbeat round with a majority, waits for its applied index to reach the recorded value, then serves locally. No log entry is created, and reads batch onto whatever AppendEntries round is already in flight. Follower linearizable reads (the follower obtains a confirmed read index from the leader, then waits for its own commit index to catch up) relieve leader concentration at the cost of an extra hop; they are gated by `followerLinearizableReads` and the reference configs enable them.
 
 Writes: wc:1 through wc:majority.
 
@@ -26,13 +26,13 @@ An application registers one or more SLAs. An SLA can be either for read or writ
 
 ## Protocol
 
-Request carries: application id, SLA id, operation (read or write, key, value), the client's committed session index, the client's uncommitted session index, and the client's current RTT estimate to this server. It does not carry a consistency level, a deadline, or any profit values.
+Request carries: application id, SLA id, operation (read or write, key, value), the client's session index (its causal frontier), and the client's current RTT estimate to this server. It does not carry a consistency level, a deadline, or any profit values.
 
 Send the RTT rather than a pre-subtracted budget, because the SLA has several thresholds and the server subtracts from each.
 
-Send both committed and uncommitted session indices, not one. Causal-local checks against the uncommitted index; causal-majority checks against the committed index. Folding them together means a wc:1 acknowledgment at an uncommitted index makes every later causal-majority read wait for an index that may never commit.
+Send one session index, the frontier of everything the session has observed, and anchor both causal levels on it. One log position suffices because everything causally before an entry has a smaller index in the single Raft log, so a view that covers the frontier covers the whole transitive causal past. A read advances the frontier to the reply's per-key value index, not to the node's log head, so a session is never bound to unrelated writes the node happened to hold. Anchoring causal-majority on the same frontier as causal-local is what makes it strictly stronger: a committed view that covers the frontier implies a local view that does. The alternative, a separate majority-acknowledged index for causal-majority, would let a wc:1-acknowledged write stay invisible to the session's own committed reads and would break the strength ordering every ranking component assumes. The residual cost is a wait on the position of a wc:1 write that a leader change later rolls back; since the anchor is a position, that wait ends as soon as any entry commits there, and the wait bound caps it regardless.
 
-Response carries: the value or acknowledgment, the level actually delivered, which rung was satisfied, the node's current log index, the node's current commit index, and the server-side service time.
+Response carries: the status (ok, redirect with leader hint, rejected, or deadline exceeded), the level actually delivered, the node's current log index and commit index, the server-side service time and whether the request waited, and for reads the value the delivered level served with its write index plus both views of the key (the local value and its write index, the committed value and its write index), or for writes the entry's index. The client grades from the indices and the delivered level alone (step 7) and surfaces whichever view's value won; the served value is one of the two views and exists for the server's own diagnostics. The reply also carries the server's own rung and profit diagnostics on the Chameleon path, which no client logic reads.
 
 The service time is required. Clients estimate RTT by subtracting it from observed end-to-end latency, using replies that involved no waiting. Without it the RTT estimate absorbs server-side work and inflates under load, which is exactly backwards.
 
@@ -48,7 +48,7 @@ There is no pool and no leader-side control state beyond that bucket. Leaders an
 
 Two resources, priced separately.
 
-Replication is a rate. Every write costs one log entry. Reads cost zero, including linearizable reads, since ReadIndex appends nothing. Budget it at the measured maximum commit rate in entries per second, refill each second, charge at admission, never return. This lives at the leader only, since all entries originate there, and in practice it gates writes only.
+Replication is a rate. Every write costs one log entry. Reads cost zero, including linearizable reads, since ReadIndex appends nothing. Budget it at the measured maximum commit rate in entries per second, refill continuously, charge at admission, never return. This lives at the leader only, since all entries originate there, and in practice it gates writes only.
 
 Raft replication uses one persistent ordered bidirectional gRPC stream from the leader to each follower. The leader pipelines disjoint batches with separate confirmed and speculative cursors, advances `matchIndex` only on an ordered acknowledgement, and bounds each follower by `maxInflightReplicationBatchesPerFollower`. A rejection, stream failure, term change, or leadership change invalidates the speculative suffix and restarts from the last confirmed prefix. `maxEntriesPerReplicationBatch` bounds each stream message.
 
@@ -62,7 +62,7 @@ Take `t_recv` the moment the request comes off the socket, before parsing and be
 
 ### Step 2: determine the legal level set
 
-Filter the ladder by this node's role and the operation type. In other words, followers can't take write requests. If the request is illegal here, redirect rather than reject.
+Filter the ladder by this node's role and the operation type. In other words, followers can't take write requests, and a follower excludes linearizable only when follower linearizable reads are disabled. If the request is illegal here, redirect rather than reject.
 
 Look up the SLA by (application id, SLA id). Reads use a read SLA, writes use a write SLA.
 
@@ -71,8 +71,8 @@ Look up the SLA by (application id, SLA id). Reads use a read SLA, writes use a 
 For each legal level `c`, compute the gap it must close before it can be served:
 
 - eventual-local, eventual-majority: gap is zero, both values are already local
-- causal-local: `gap = client_uncommitted_index - local_log_index`
-- causal-majority: `gap = client_committed_index - commit_index`
+- causal-local: `gap = session_index - local_log_index`
+- causal-majority: `gap = session_index - commit_index`
 - linearizable and write concerns: no gap dimension, they wait on rounds rather than indices
 
 Bucket the gap coarsely based on the maximum batch size, for example into buckets for `gap <= 0`, `1..2000`, `2001..20000`, `> 20000`. Everything at or below zero lands in the same bucket, whose observed waits are near zero, so the case where an upgrade is free emerges from measured data rather than from a special rule.
@@ -149,11 +149,11 @@ Wait for whatever the chosen level requires, then read or apply. Eventual levels
 
 These are execution mechanics, not decision points. The decision was made in step 4 and is not revisited.
 
-Bound the wait by the loosest server-side threshold computed in step 4b. If it expires, abandon the wait, fall back to the strongest level that needs no waiting, and serve immediately. A request that waits past every threshold will deliver zero profit whatever it does, so continuing to hold a slot for it is pure loss.
+Bound the wait by the loosest server-side threshold computed in step 4b, clamped to the configured `maxWaitMs` backstop (500 ms in the reference configs). The clamp caps how long any request can hold a slot waiting; a rung whose threshold exceeds it falls back earlier than its threshold alone would allow. If the bound expires, abandon the wait, fall back to the strongest level that needs no waiting, and serve immediately. A request that waits past every threshold will deliver zero profit whatever it does, so continuing to hold a slot for it is pure loss.
 
 ### Step 7: grade after the fact
 
-Determine what was actually delivered, not what was targeted. Reads frequently satisfy a stronger level than the one chosen, and that profit is free.
+Determine what was actually delivered, not what was targeted. Reads frequently satisfy a stronger level than the one chosen, and that profit is free. In the implementation this grading, and the profit ledger built from it, run in the client, computed from the delivered level and the log and commit indices carried on the reply; the server's own sample filing in step 8 is unaffected.
 
 For a read, take the returned value's index. If it is at or below the commit index, the majority rungs are satisfied as well as the local ones. If the replica turned out to be at or ahead of the client's session index, causal is satisfied even if eventual was executed.
 
@@ -179,7 +179,7 @@ If the request abandoned its wait in step 6, file the sample into the cell of th
 
 Histogram cells use fixed geometric bucket edges, for example 64 buckets from 0.5 ms with ratio 1.15, so the bucket index for `x` is `floor(log(x/0.5)/log(1.15))` and no search is needed.
 
-On each tick, multiply every bucket count, running sum, and running count by a decay factor around 0.95, then rebuild the prefix-sum array and publish it. Old observations fade geometrically, giving an effective memory of roughly `interval / (1 - decay)`, so 100 ms and 0.95 gives about 2000 ms; tune the decay for the memory you want.
+On each tick, multiply every bucket count, running sum, and running count by a decay factor, then rebuild the prefix-sum array and publish it. Old observations fade geometrically, giving an effective memory of roughly `interval / (1 - decay)`, so 100 ms and 0.95 gives about 2000 ms; tune the decay for the memory you want. The reference configs use 0.9, about 1000 ms.
 
 Requests read the published snapshot and never block on the refresh. The snapshot is up to one tick stale, which is far below the estimate's own variance. With around 24 cells at 64 buckets a full sweep is about 1500 operations.
 
@@ -203,7 +203,7 @@ Then update the price:
 lambda <- max( lambda_min, lambda * exp( eta * ( u - u_target ) ) )
 ```
 
-with `u_target` around 0.85, `eta` around 1, and `lambda_min` a small positive constant; 0.0001 works for rung profits on the order of 1 to 100. The floor does two jobs: it lets `lambda` start at zero, since the multiplicative update on its own would leave zero unchanged forever, and it stops `lambda` decaying so far during idle periods that recovery takes many intervals.
+with `u_target` around 0.85, `eta` setting the reaction speed (the reference configs use 0.1; 1 reacts within a couple of intervals but overshoots more), and `lambda_min` a small positive constant; 0.0001 works for rung profits on the order of 1 to 100. The floor does two jobs: it lets `lambda` start at zero, since the multiplicative update on its own would leave zero unchanged forever, and it stops `lambda` decaying so far during idle periods that recovery takes many intervals.
 
 Multiplicative rather than additive because the right price spans orders of magnitude and because it can never go negative. A controller rather than a closed form because profit units are whatever the applications say they are, so a closed form would need a scale constant that is actually accurate. `lambda_min` is the one constant that remains, and it only has to be the right order of magnitude, since the controller finds the operating price from there.
 
