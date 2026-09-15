@@ -36,6 +36,24 @@ Response carries: the status (ok, redirect with leader hint, rejected, or deadli
 
 The service time is required. Clients estimate RTT by subtracting it from observed end-to-end latency. It spans frame receipt to reply write on the server's clock, so it contains any queueing or waiting and every reply, waited or not, is a valid sample. Without it the RTT estimate absorbs server-side work and inflates under load, which is exactly backwards.
 
+## Client routing
+
+The server decides the level; the client decides the server. Every arm routes with the same rule except where noted, so the cross-arm comparison measures the decision policy and not the placement policy.
+
+Each session keeps, per server, a sliding window of the last `rttWindowSize` network RTT samples (64 in the reference configs): end-to-end latency minus the service time the reply reported. Every reply is a sample, served, rejected, or redirected, because the service time already contains any server-side waiting or queueing, and rejections matter most: they are the only samples still flowing when a node sheds everything, and without them an estimate poisoned by an overload burst could never recover. The estimate for a server is the window's median; a server with no samples estimates 0. This is the same number the request carries as the scorer's `rho`.
+
+The RTT is deliberately blind to load. Subtracting service time removes queueing, index waits and CPU saturation from the sample, so a saturated server at the same distance looks exactly as attractive as an idle one. The load signal is kept separately: per session, per registered SLA (reads and writes tracked apart), per server, exponentially decayed counts of admits and rejects with a prior of 1, giving `pAdmit = (admits + 1) / (admits + rejects + 1)`. The prior makes the estimate 1 with no evidence and keeps it strictly above 0 under any number of rejections, so a rejecting node always retains a re-probe incentive. The counts decay by `admitRateGamma` once per second (0.9 in the reference configs, so a rejection loses half its weight in about seven seconds), which lets a recovered node earn its traffic back. Tracking per SLA matters because the scorer rejects low-profit SLAs first: a node shedding browses may still be accepting checkouts.
+
+Reads score every server as `rtt / pAdmit` and go to the minimum, ties broken uniformly at random. With no rejections the score is the raw RTT, so the admit factor changes nothing until a node starts shedding, and then a node rejecting half of this SLA's requests looks twice as far away. The random tie-break matters at cold start, when every estimate is 0 and the first probes spread across the cluster. A fraction `explorationFraction` of reads (0.15) bypasses the score and goes to a uniformly random server, so the windows of servers that are not currently winning keep receiving samples and a recovered or newly fast server can win the routing back. This is the only mechanism that bounds how stale a rarely contacted server's window can become: a window holds its last 64 samples however long ago they arrived, unlike the server's histograms, which forget geometrically.
+
+Writes go to the last known leader, learned from redirects, and round-robin across servers until the first redirect fills the hint in. Writes are never explored and never RTT-routed: they must reach the leader, and any other target costs a redirect round trip.
+
+The client-decided arms (strongest and weakest) route reads identically, with one exception: when the fixed rung is linearizable and follower linearizable reads are disabled, the read goes straight to the leader hint, since no follower can serve it. The reference configs enable follower linearizable reads, so this branch does not fire in the experiments.
+
+The Pileus arms (pileus and chameleonPileus) replace the read rule with the Pileus selector, which picks the server maximising expected profit over its own per-server windows of full response time, including service time and waits, and its tracked per-server high-water log and commit indices, multiplied by the same `pAdmit`. Pileus takes both the server and the rung from that choice; chameleonPileus takes only the server and lets the scorer choose the level. When the selector returns no candidate, both fall back to the `rtt / pAdmit` rule. Exploration applies to the selector at the same fraction. The RTT sent on the request is still the network-only estimate in these arms, because the scorer's `rho` must not contain the server's own service time.
+
+Redirects update the leader hint and resend to it (or to the next server round-robin when the redirect carried no hint), up to `retryLimit` attempts (3), after which the request is a failure. Rejections are terminal by design and never retried: a rejected request is recorded as shed and its only lasting effect is on the RTT window and the admit counts.
+
 ## Server state
 
 Per node: Raft log index and commit index; a histogram of service times per (level, gap bucket); an occupancy accumulator; the shadow price lambda; the registered SLA tables.
@@ -73,8 +91,7 @@ For each legal level `c`, compute the gap it must close before it can be served:
 - eventual-local, eventual-majority: gap is zero, both values are already local
 - causal-local: `gap = session_index - local_log_index`
 - causal-majority: `gap = session_index - commit_index`
-- linearizable: the same gap as causal-majority, since the read waits for the larger of the confirmed read index and the session frontier, on top of the leadership round
-- write concerns: no gap dimension, they wait on replication acks rather than indices, so they always use the `gap <= 0` bucket
+- linearizable and write concerns: no gap dimension, they wait on rounds and acks rather than indices, so they always use the `gap <= 0` bucket. A linearizable read does also wait for the session frontier, but that wait overlaps the leadership round and is dominated by it, and splitting the level's samples across rarely fed gap buckets would leave the scorer pricing it from cold cells exactly when the gap is large.
 
 Bucket the gap coarsely based on the maximum batch size, for example into buckets for `gap <= 0`, `1..2000`, `2001..20000`, `> 20000`. Everything at or below zero lands in the same bucket, whose observed waits are near zero, so the case where an upgrade is free emerges from measured data rather than from a special rule.
 
@@ -182,7 +199,7 @@ Histogram cells use fixed geometric bucket edges, for example 64 buckets from 0.
 
 On each tick, multiply every bucket count, running sum, and running count by a decay factor, then rebuild the prefix-sum array and publish it. Old observations fade geometrically, giving an effective memory of roughly `interval / (1 - decay)`, so 100 ms and 0.95 gives about 2000 ms; tune the decay for the memory you want. The reference configs use 0.9, about 1000 ms.
 
-Requests read the published snapshot and never block on the refresh. The snapshot is up to one tick stale, which is far below the estimate's own variance. The grid is 5 read levels plus majority write concerns, times 4 gap buckets, but only the three index-waiting read levels use more than the first gap bucket, so 17 of the 32 cells ever hold samples (14 in a 3-node cluster). The refresh sweeps every allocated cell regardless, so at 64 buckets a tick is 2048 bucket decays plus as many prefix-sum entries, a few thousand operations.
+Requests read the published snapshot and never block on the refresh. The snapshot is up to one tick stale, which is far below the estimate's own variance. The grid is 5 read levels plus majority write concerns, times 4 gap buckets, but only the two causal levels use more than the first gap bucket, so 14 of the 32 cells ever hold samples (13 in a 3-node cluster). The refresh sweeps every allocated cell regardless, so at 64 buckets a tick is 2048 bucket decays plus as many prefix-sum entries, a few thousand operations.
 
 ### Price controller, once per control interval
 

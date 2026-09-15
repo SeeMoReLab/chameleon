@@ -83,7 +83,7 @@ The linearizable row prices the leader-served path. With follower linearizable r
 
 Quorum cost across the three configs is roughly 1.2, 20, and 80 ms, about two orders of magnitude. With the SLA thresholds held fixed, that is what makes rungs progressively unreachable and turns the choice of delay into a swept parameter rather than something to defend.
 
-Phoenix and Tokyo are the same probe at two scales: in both, the nearest node is also the stalest, so least-RTT routing takes the close-and-lagging option while a freshness-aware policy pays a little more distance for much fresher data. That is the cleanest single test of routing quality in the setup, and it mirrors Pileus's China client, the only one of their four with no local replica.
+Phoenix and Tokyo are the same probe at two scales: in both, the nearest node is also the stalest, so least-RTT routing (RTT over admit probability, the rule in DESIGN.md's client routing section) takes the close-and-lagging option while a freshness-aware policy pays a little more distance for much fresher data. That is the cleanest single test of routing quality in the setup, and it mirrors Pileus's China client, the only one of their four with no local replica.
 
 Leader placement is a cheap extra sweep: moving the leader to Singapore in the global config inverts the cost landscape and is the natural configuration for the flash sale.
 

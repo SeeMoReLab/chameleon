@@ -362,11 +362,14 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         List<Candidate> candidates = new ArrayList<>(READ_LEVELS);
         int satisfiableAnywhere = 0;
         for (int level = 0; level <= maxLevel; level++) {
-            // Step 3: the gap each level must close, bucketed coarsely.
+            // Step 3: the gap each level must close, bucketed coarsely. Only
+            // the causal levels wait on an index. Linearizable waits on the
+            // leadership round, which overlaps any frontier wait and dominates
+            // it, so one cell keeps its samples dense instead of scattering
+            // them over rarely fed gap buckets.
             long gap = switch (ReadLevel.forNumber(level)) {
                 case CAUSAL_LOCAL -> (long) sessionIndex - node.lastLogIndex();
-                case CAUSAL_MAJORITY, LINEARIZABLE ->
-                    (long) sessionIndex - node.currentCommitIndex();
+                case CAUSAL_MAJORITY -> (long) sessionIndex - node.currentCommitIndex();
                 default -> 0L;
             };
             Candidate candidate = scoreLevel(sla, level, level, ServiceTimeHistograms.gapBucketOf(gap), rho, lambda);
