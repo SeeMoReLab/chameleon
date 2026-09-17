@@ -2,7 +2,7 @@ package org.example.Client;
 
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 import org.example.Utility.RungScorer;
 import org.example.raft.ReadLevel;
@@ -54,8 +54,8 @@ final class PileusSelector {
     private final SlidingWindow[] plainWindows;
     private final SlidingWindow[] linWindows;
     private final SlidingWindow[] writeWindows; // index = concern - 1
-    private final AtomicIntegerArray highLogIndex;
-    private final AtomicIntegerArray highCommitIndex;
+    private final AtomicLongArray highLogIndex;
+    private final AtomicLongArray highCommitIndex;
     private final boolean followerLinReads;
     private final double explorationFraction;
     private final Random random;
@@ -86,8 +86,8 @@ final class PileusSelector {
         for (int c = 0; c < majority; c++) {
             writeWindows[c] = new SlidingWindow(windowSize);
         }
-        this.highLogIndex = new AtomicIntegerArray(numServers);
-        this.highCommitIndex = new AtomicIntegerArray(numServers);
+        this.highLogIndex = new AtomicLongArray(numServers);
+        this.highCommitIndex = new AtomicLongArray(numServers);
         for (int i = 0; i < numServers; i++) {
             highLogIndex.set(i, -1);
             highCommitIndex.set(i, -1);
@@ -99,7 +99,7 @@ final class PileusSelector {
 
     // ===== Observation =====
 
-    void observeIndices(int node, int logIndex, int commitIndex) {
+    void observeIndices(int node, long logIndex, long commitIndex) {
         highLogIndex.accumulateAndGet(node, logIndex, Math::max);
         highCommitIndex.accumulateAndGet(node, commitIndex, Math::max);
     }
@@ -176,7 +176,7 @@ final class PileusSelector {
      * attractiveness in profit space instead of through latency-window
      * penalty samples.
      */
-    Choice chooseRead(List<RungScorer.Rung> sla, int sessionIndex, int leaderHint,
+    Choice chooseRead(List<RungScorer.Rung> sla, long sessionIndex, int leaderHint,
             AdmitRates admitRates) {
         if (explorationFraction > 0 && random.nextDouble() < explorationFraction) {
             int node = random.nextInt(numServers);
@@ -196,7 +196,7 @@ final class PileusSelector {
     }
 
     /** The best rung to target at one specific server (used for exploration too). */
-    private Choice bestRungForNode(List<RungScorer.Rung> sla, int node, int sessionIndex,
+    private Choice bestRungForNode(List<RungScorer.Rung> sla, int node, long sessionIndex,
             int leaderHint, AdmitRates admitRates) {
         double admitFactor = admitRates == null ? 1.0 : admitRates.pAdmit(node);
         Choice best = null;
@@ -222,7 +222,7 @@ final class PileusSelector {
         return best;
     }
 
-    private boolean readFeasible(int strength, int node, int sessionIndex) {
+    private boolean readFeasible(int strength, int node, long sessionIndex) {
         if (strength == ReadLevel.CAUSAL_LOCAL.getNumber()) {
             return sessionIndex < 0 || highLogIndex.get(node) >= sessionIndex;
         }

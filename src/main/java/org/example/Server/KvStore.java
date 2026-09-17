@@ -25,7 +25,7 @@ import org.example.Utility.LogEntry;
 public final class KvStore {
 
     /** A value plus the log index of the write that produced it. */
-    public record Versioned(String value, int index) {
+    public record Versioned(String value, long index) {
     }
 
     private final ConcurrentHashMap<String, Versioned> local = new ConcurrentHashMap<>();

@@ -50,8 +50,8 @@ public final class Grading {
      * frontier, the highest log index it has written or read (-1 = none),
      * for both local and majority views.
      */
-    public static int gradeRead(ReadLevel executed, int valueIndex, int commitIndex, int viewFrontierIndex,
-            int sessionIndex) {
+    public static int gradeRead(ReadLevel executed, long valueIndex, long commitIndex, long viewFrontierIndex,
+            long sessionIndex) {
         int graded = ReadLevel.EVENTUAL_LOCAL.getNumber();
         boolean valueCommitted = valueIndex <= commitIndex;
         boolean viewCoversFrontier = sessionIndex < 0 || viewFrontierIndex >= sessionIndex;

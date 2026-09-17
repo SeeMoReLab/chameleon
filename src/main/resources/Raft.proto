@@ -106,7 +106,7 @@ message KvRequest {
   // session has written or read (-1 = none). Causal levels wait for the
   // serving view to cover it. One log position suffices because everything
   // causally before an entry has a smaller index in the single Raft log.
-  int32 sessionIndex = 8;
+  int64 sessionIndex = 8;
   reserved 7; // was committedSessionIndex; never consumed by any reader
   double rttEstimateMs = 9;          // client's RTT estimate to this server
 
@@ -119,6 +119,11 @@ message KvRequest {
   bool wantLinearizable = 12;        // reads: run the ReadIndex round
   int32 requestedWriteConcern = 13;  // writes: acks to wait for (1..majority)
   double waitBoundMs = 14;           // clamp on this request's server-side wait; <=0 = maxWaitMs
+  // Client-decided target read level (non-chameleon modes). The KV server
+  // ignores it (its client-decided path serves the committed view and the
+  // client grades); the MongoDB transport needs it to choose readConcern and
+  // afterClusterTime up front, since a MongoDB read returns one view.
+  optional ReadLevel targetReadLevel = 15;
 }
 
 message KvResponse {
@@ -126,13 +131,13 @@ message KvResponse {
   bool ok = 2;
   bool notLeader = 3;                // redirect: resend to leaderId
   int32 leaderId = 4;                // valid when notLeader; -1 = unknown
-  int32 valueIndex = 6;              // writes: the entry's index. Reads: log index of the value the delivered level served; -1 = absent
+  int64 valueIndex = 6;              // writes: the entry's index. Reads: log index of the value the delivered level served; -1 = absent
   ReadLevel deliveredReadLevel = 7;
   int32 deliveredWriteConcern = 8;   // replication count at acknowledgment
   bool waited = 9;                   // request waited server-side (ledger diagnostic)
   bool timedOutAndFellBack = 10;     // wait expired; served at the strongest no-wait level
-  int32 logIndex = 11;               // node's last log index at reply
-  int32 commitIndex = 12;            // node's commit index at reply
+  int64 logIndex = 11;               // node's last log index at reply
+  int64 commitIndex = 12;            // node's commit index at reply
   double serviceTimeMs = 13;         // reply time minus t_recv, monotonic clock
   bool rejected = 14;                // admission control shed this request (max V_c <= 0 or a hard backstop)
   double predictedProfit = 16;       // E_c of the chosen level at decision time (chameleon* modes; the ledger's prediction column)
@@ -141,8 +146,8 @@ message KvResponse {
   // client-side (step 7): the client grades each view from these indices and
   // the node's log and commit indices, credits the better-paying one, and
   // advances its session frontier to that view's write index.
-  int32 localValueIndex = 20;        // log index of the local (may-roll-back) value's write; -1 = absent
-  int32 committedValueIndex = 22;    // log index of the majority-committed value's write; -1 = absent
+  int64 localValueIndex = 20;        // log index of the local (may-roll-back) value's write; -1 = absent
+  int64 committedValueIndex = 22;    // log index of the majority-committed value's write; -1 = absent
   int64 serverReplyEpochMs = 23;      // wall-clock timestamp immediately before the framed response write
   bool deadlineExceeded = 24;         // expired in transport or the bounded admission queue
 

@@ -58,7 +58,7 @@ final class TestSession implements AutoCloseable {
         return call(writeRequest(key, value, applicationId, slaId));
     }
 
-    KvResponse read(String key, int applicationId, int slaId, int sessionIndex)
+    KvResponse read(String key, int applicationId, int slaId, long sessionIndex)
             throws Exception {
         return call(readRequest(key, applicationId, slaId, sessionIndex));
     }
@@ -69,7 +69,7 @@ final class TestSession implements AutoCloseable {
                 .setSessionIndex(-1);
     }
 
-    static KvRequest.Builder readRequest(String key, int applicationId, int slaId, int sessionIndex) {
+    static KvRequest.Builder readRequest(String key, int applicationId, int slaId, long sessionIndex) {
         return KvRequest.newBuilder().setIsRead(true).setKey(key)
                 .setApplicationId(applicationId).setSlaId(slaId)
                 .setSessionIndex(sessionIndex);

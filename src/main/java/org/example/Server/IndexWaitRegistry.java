@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Waiters keyed by a monotonically advancing log position (local log index or
@@ -15,10 +15,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class IndexWaitRegistry {
 
-    private final ConcurrentSkipListMap<Integer, List<CompletableFuture<Void>>> waiters = new ConcurrentSkipListMap<>();
-    private final AtomicInteger reached = new AtomicInteger(-1);
+    private final ConcurrentSkipListMap<Long, List<CompletableFuture<Void>>> waiters = new ConcurrentSkipListMap<>();
+    private final AtomicLong reached = new AtomicLong(-1);
 
-    CompletableFuture<Void> await(int index) {
+    CompletableFuture<Void> await(long index) {
         if (reached.get() >= index) {
             return CompletableFuture.completedFuture(null);
         }
@@ -32,8 +32,8 @@ final class IndexWaitRegistry {
         return future;
     }
 
-    void signal(int reachedIndex) {
-        int previous;
+    void signal(long reachedIndex) {
+        long previous;
         do {
             previous = reached.get();
             if (reachedIndex <= previous) {
@@ -41,8 +41,8 @@ final class IndexWaitRegistry {
             }
         } while (!reached.compareAndSet(previous, reachedIndex));
 
-        Map<Integer, List<CompletableFuture<Void>>> ready = waiters.headMap(reachedIndex, true);
-        for (Integer key : ready.keySet()) {
+        Map<Long, List<CompletableFuture<Void>>> ready = waiters.headMap(reachedIndex, true);
+        for (Long key : ready.keySet()) {
             List<CompletableFuture<Void>> futures = waiters.remove(key);
             if (futures != null) {
                 synchronized (futures) {
@@ -54,7 +54,7 @@ final class IndexWaitRegistry {
         }
     }
 
-    int reachedIndex() {
+    long reachedIndex() {
         return reached.get();
     }
 }

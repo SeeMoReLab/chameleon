@@ -42,12 +42,12 @@ public final class ClientGrader {
             /** True when the local view's value is the one surfaced. */
             boolean viaLocalView,
             /** Log index of the surfaced value's write (-1 = absent); the session frontier advances to it. */
-            int creditedValueIndex,
+            long creditedValueIndex,
             boolean deadlineViolation) {
     }
 
     public static Verdict gradeRead(List<RungScorer.Rung> sla, KvResponse response,
-            int sessionIndex, double latencyMs) {
+            long sessionIndex, double latencyMs) {
         // Do not seed either grade from a server-reported causal label: that
         // would let Chameleon grade its own work while Pileus is checked from
         // returned state. Keep Pileus's existing post-hoc Grading rules and
@@ -75,7 +75,7 @@ public final class ClientGrader {
         boolean deadlineViolation = best.rungIndex() < 0
                 && (Grading.missedDeadline(sla, localGrade, latencyMs)
                         || Grading.missedDeadline(sla, committedGrade, latencyMs));
-        int creditedValueIndex = localWins ? response.getLocalValueIndex() : response.getCommittedValueIndex();
+        long creditedValueIndex = localWins ? response.getLocalValueIndex() : response.getCommittedValueIndex();
         return new Verdict(gradedStrength, best.rungIndex(), best.profit(), localWins, creditedValueIndex,
                 deadlineViolation);
     }

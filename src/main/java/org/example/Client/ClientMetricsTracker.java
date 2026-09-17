@@ -153,6 +153,57 @@ public final class ClientMetricsTracker {
         maybeFlush();
     }
 
+    // Transport errors by cause, every attempt (retries included), so a run
+    // says why its calls failed instead of only how many did. Keyed by the
+    // failure description with digits collapsed, which folds addresses,
+    // timings and request ids into one key per cause.
+    private static final Map<String, AtomicLong> transportErrorCauses = new ConcurrentHashMap<>();
+    private static final int CAUSE_KEY_MAX_CHARS = 160;
+
+    // The first few full descriptions per cause: a server-selection timeout,
+    // for one, carries the driver's view of every server's state, which the
+    // collapsed key drops.
+    private static final int CAUSE_SAMPLES = 2;
+    private static final int CAUSE_SAMPLE_MAX_CHARS = 3000;
+    private static final Map<String, java.util.List<String>> transportErrorSamples = new ConcurrentHashMap<>();
+
+    /** A transport attempt failed with this status description (not a rejection or a deadline). */
+    public static void recordTransportError(String description) {
+        String key = causeKey(description);
+        transportErrorCauses.computeIfAbsent(key, k -> new AtomicLong()).incrementAndGet();
+        java.util.List<String> samples = transportErrorSamples.computeIfAbsent(key,
+                k -> java.util.Collections.synchronizedList(new java.util.ArrayList<>(CAUSE_SAMPLES)));
+        if (samples.size() < CAUSE_SAMPLES && description != null) {
+            samples.add(description.length() > CAUSE_SAMPLE_MAX_CHARS
+                    ? description.substring(0, CAUSE_SAMPLE_MAX_CHARS) + "..." : description);
+        }
+    }
+
+    /** The first full descriptions recorded under this cause key, in arrival order. */
+    public static java.util.List<String> transportErrorSamples(String causeKey) {
+        java.util.List<String> samples = transportErrorSamples.get(causeKey);
+        return samples == null ? java.util.List.of() : java.util.List.copyOf(samples);
+    }
+
+    /** Normalises a failure description into a low-cardinality cause key. */
+    static String causeKey(String description) {
+        String key = description == null ? "(no description)" : description.replaceAll("[0-9]+", "#").trim();
+        if (key.isEmpty()) {
+            key = "(no description)";
+        }
+        return key.length() > CAUSE_KEY_MAX_CHARS ? key.substring(0, CAUSE_KEY_MAX_CHARS) : key;
+    }
+
+    /** Transport error counts by cause, largest first. */
+    public static java.util.List<Map.Entry<String, Long>> transportErrorsByCause() {
+        java.util.List<Map.Entry<String, Long>> out = new java.util.ArrayList<>();
+        for (Map.Entry<String, AtomicLong> e : transportErrorCauses.entrySet()) {
+            out.add(Map.entry(e.getKey(), e.getValue().get()));
+        }
+        out.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+        return out;
+    }
+
     /** A request or retry was submitted to the asynchronous framed transport. */
     public static void recordTransportCall(int nodeId, String site, String chosen, double invocationMs) {
         Cell c = cell(nodeId, site, chosen, "-");

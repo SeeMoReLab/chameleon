@@ -109,7 +109,7 @@ class ResponseGradingIntegrationTest {
             ServerImpl leader = cluster.awaitLeader(15_000);
             try (TestSession session = new TestSession(cluster.portOf(leader.nodeId()))) {
                 double predicted = 0;
-                int sessionIndex = -1;
+                long sessionIndex = -1;
 
                 for (int i = 0; i < 30; i++) {
                     KvResponse write = session.write("k" + (i % 5), "v" + i, 40, 1);

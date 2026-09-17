@@ -181,7 +181,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 ? node.confirmLeadership()
                 : node.readIndexFromLeader();
         return confirmed.thenCompose(readIndex -> {
-            int requiredIndex = Math.max(readIndex, request.getSessionIndex());
+            long requiredIndex = Math.max(readIndex, request.getSessionIndex());
             return node.currentCommitIndex() >= requiredIndex
                     ? CompletableFuture.completedFuture(null)
                     : node.awaitCommitIndex(requiredIndex);
@@ -357,7 +357,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         int maxLevel = (leader || FOLLOWER_LINEARIZABLE_READS) ? READ_LEVELS - 1 : READ_LEVELS - 2;
         double rho = effectiveRttMs(request, out);
         double lambda = plane.lambda();
-        int sessionIndex = request.getSessionIndex();
+        long sessionIndex = request.getSessionIndex();
 
         List<Candidate> candidates = new ArrayList<>(READ_LEVELS);
         int satisfiableAnywhere = 0;
@@ -368,8 +368,8 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
             // it, so one cell keeps its samples dense instead of scattering
             // them over rarely fed gap buckets.
             long gap = switch (ReadLevel.forNumber(level)) {
-                case CAUSAL_LOCAL -> (long) sessionIndex - node.lastLogIndex();
-                case CAUSAL_MAJORITY -> (long) sessionIndex - node.currentCommitIndex();
+                case CAUSAL_LOCAL -> sessionIndex - node.lastLogIndex();
+                case CAUSAL_MAJORITY -> sessionIndex - node.currentCommitIndex();
                 default -> 0L;
             };
             Candidate candidate = scoreLevel(sla, level, level, ServiceTimeHistograms.gapBucketOf(gap), rho, lambda);
@@ -408,7 +408,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
             case EVENTUAL_MAJORITY -> completeRead(request, tRecvNanos, out, chosen, ReadLevel.EVENTUAL_MAJORITY,
                     node.kv.readCommitted(key), false, false, 0);
             case CAUSAL_LOCAL -> {
-                int anchor = request.getSessionIndex();
+                long anchor = request.getSessionIndex();
                 if (anchor < 0 || node.lastLogIndex() >= anchor) {
                     completeRead(request, tRecvNanos, out, chosen, ReadLevel.CAUSAL_LOCAL,
                             node.kv.readLocal(key), false, false, 0);
@@ -421,7 +421,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 }
             }
             case CAUSAL_MAJORITY -> {
-                int anchor = request.getSessionIndex();
+                long anchor = request.getSessionIndex();
                 if (anchor < 0 || node.currentCommitIndex() >= anchor) {
                     completeRead(request, tRecvNanos, out, chosen, ReadLevel.CAUSAL_MAJORITY,
                             node.kv.readCommitted(key), false, false, 0);

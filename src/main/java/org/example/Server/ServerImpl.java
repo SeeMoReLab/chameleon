@@ -325,12 +325,12 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     }
 
     /** Completes once this node's local log covers the given index. */
-    public CompletableFuture<Void> awaitLocalLogIndex(int index) {
+    public CompletableFuture<Void> awaitLocalLogIndex(long index) {
         return localLogWaiters.await(index);
     }
 
     /** Completes once this node's commit index covers the given index. */
-    public CompletableFuture<Void> awaitCommitIndex(int index) {
+    public CompletableFuture<Void> awaitCommitIndex(long index) {
         return commitWaiters.await(index);
     }
 

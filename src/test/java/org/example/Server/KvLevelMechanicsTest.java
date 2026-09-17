@@ -98,7 +98,7 @@ class KvLevelMechanicsTest {
                 // causal-majority read, which must block until the follower's
                 // commit index catches up.
                 KvResponse write = leaderSession.write("causal-key", "cv", 12, 1);
-                int anchor = write.getValueIndex();
+                long anchor = write.getValueIndex();
 
                 KvResponse read = followerSession.read("causal-key", 12, 1, anchor);
                 assertTrue(read.getOk());
@@ -215,7 +215,7 @@ class KvLevelMechanicsTest {
             // Another session writes; the session under test has observed
             // nothing yet, so the only way its frontier can reach the write
             // is by reading the value.
-            int written;
+            long written;
             try (TestSession writer = new TestSession(cluster.portOf(leader.nodeId()))) {
                 KvResponse w = writer.write("frontier-key", "v", 17, 1);
                 assertTrue(w.getOk());

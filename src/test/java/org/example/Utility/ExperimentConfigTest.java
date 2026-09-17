@@ -20,6 +20,7 @@ class ExperimentConfigTest {
     // Surefire's working directory is the build directory, a direct child of
     // the repo root, so the repo config is one level up.
     private static final Path REPO_CONFIG = Path.of("..", "config_local.yaml");
+    private static final Path MONGODB_CONFIG = Path.of("..", "config_mongodb_smoke.yaml");
 
     @Test
     void repoConfigLoadsAndValidates() {
@@ -180,5 +181,52 @@ class ExperimentConfigTest {
         assertEquals("127.0.2.6", ExperimentConfig.clientSiteBindHost(5));
         assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.clientSiteBindHost(-1));
         assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.clientSiteBindHost(254));
+    }
+
+    @Test
+    void mongodbServerHooksDefaultOnAndOffOnlyForClientDecidedModes() throws IOException {
+        assertTrue(Files.exists(MONGODB_CONFIG), "repo config_mongodb_smoke.yaml must exist");
+        String base = Files.readString(MONGODB_CONFIG);
+        ExperimentConfig config = ExperimentConfig.load(MONGODB_CONFIG);
+        assertTrue(config.mongodbServerHooks(), "the switch defaults to on");
+        assertTrue(base.contains("\n  serverHooks: true\n"), "the repo config states the default explicitly");
+
+        String off = base.replace("\n  serverHooks: true\n", "\n  serverHooks: false\n");
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, off);
+            assertEquals(false, ExperimentConfig.load(tmp).mongodbServerHooks(), "weakest may run without the hooks");
+
+            Files.writeString(tmp, off.replaceFirst("(?m)^mode: weakest", "mode: chameleon"));
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ExperimentConfig.load(tmp));
+            assertTrue(e.getMessage().contains("serverHooks"), e.getMessage());
+
+            Files.writeString(tmp, off.replaceFirst("(?m)^mode: weakest", "mode: pileus"));
+            e = assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.load(tmp));
+            assertTrue(e.getMessage().contains("pileus"), e.getMessage());
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    @Test
+    void mongodbPoolWaitTimeoutIsRequiredAndPositive() throws IOException {
+        String base = Files.readString(MONGODB_CONFIG);
+        assertTrue(base.contains("\n  poolWaitTimeoutMs: 1000\n"), "the repo config sets the pool wait");
+        assertEquals(1000, ExperimentConfig.load(MONGODB_CONFIG).mongodb.poolWaitTimeoutMs);
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, base.replace("\n  poolWaitTimeoutMs: 1000\n", "\n"));
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ExperimentConfig.load(tmp));
+            assertTrue(e.getMessage().contains("poolWaitTimeoutMs"), e.getMessage());
+
+            Files.writeString(tmp, base.replace("\n  poolWaitTimeoutMs: 1000\n", "\n  poolWaitTimeoutMs: 0\n"));
+            e = assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.load(tmp));
+            assertTrue(e.getMessage().contains("poolWaitTimeoutMs"), e.getMessage());
+        } finally {
+            Files.delete(tmp);
+        }
     }
 }

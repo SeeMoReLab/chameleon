@@ -39,6 +39,38 @@ public final class ExperimentConfig {
     public NodeFailure nodeFailure;
     public TimedFailure timedFailure;
     public Geo geo;
+    // Optional (MONGODB_PORT.md): "framed" (default, the Java KV store) or "mongodb" (the patched
+    // mongod replica set). With "mongodb" the mongodb block below is required.
+    public String transport;
+    public Mongodb mongodb;
+
+    /** MongoDB transport settings; only read when transport is "mongodb". */
+    public static final class Mongodb {
+        public Integer port;                     // every mongod listens on this port on its own cluster.serverHosts address
+        public String replicaSet;                // replica set name passed to --replSet and rs.initiate
+        public String database;                  // database holding the key-value collection
+        public String collection;                // collection holding documents {_id: key, v: value}
+        public Integer maxPoolSize;              // driver connections per client site (bounds in-flight ops per site)
+        public Integer serverSelectionTimeoutMs; // how long the driver waits for a node before the request fails
+        public Integer poolWaitTimeoutMs;        // how long a checkout waits for a pooled connection (must cover one open, two round trips)
+        public Integer statusPollIntervalMs;     // period of the serverStatus poll that writes occupancy_<n>.csv
+        /**
+         * Whether the server-side Chameleon module is used (default true). False leaves
+         * chameleonEnabled at its server default of false, pushes no parameters, grades
+         * from the driver's own reply metadata instead of the $chameleon envelope, and
+         * records occupancy from stock serverStatus fields. Valid only with the
+         * client-decided modes weakest and strongest; measures the hooks' cost and lets
+         * the harness run against an unpatched mongod.
+         */
+        public Boolean serverHooks;
+        /**
+         * mongod binary the CloudLab runner starts on the node (default: the experiment binary,
+         * ~/tuneable/mongod, built by build_mongod.sh). A leading ~ expands to the node's home.
+         * Points a run at the unpatched control or a stock release; only meaningful together
+         * with serverHooks: false, since those binaries reject the Chameleon parameters.
+         */
+        public String binaryPath;
+    }
 
     public static final class Cluster {
         public Integer numServers;
@@ -220,6 +252,16 @@ public final class ExperimentConfig {
         System.out.println("durationSeconds=" + durationSeconds);
         System.out.println("serverHosts=" + String.join(",", config.cluster.serverHosts));
         System.out.println("geoEnabled=" + config.geo.enabled);
+        System.out.println("transport=" + config.transport);
+        if (config.mongodbTransport()) {
+            System.out.println("mongodbPort=" + config.mongodb.port);
+            System.out.println("mongodbReplicaSet=" + config.mongodb.replicaSet);
+            System.out.println("mongodbMaxPoolSize=" + config.mongodb.maxPoolSize);
+            System.out.println("mongodbPoolWaitTimeoutMs=" + config.mongodb.poolWaitTimeoutMs);
+            System.out.println("mongodbServerHooks=" + config.mongodb.serverHooks);
+            System.out.println("mongodbBinaryPath=" + (config.mongodb.binaryPath == null ? "" : config.mongodb.binaryPath));
+            System.out.println("preferredLeaderId=" + config.cluster.preferredLeaderId);
+        }
         if (config.geo.enabled) {
             // Matrix rows are ';'-separated, entries ','-separated, in ms.
             StringBuilder matrix = new StringBuilder();
@@ -454,7 +496,72 @@ public final class ExperimentConfig {
         }
     }
 
+    /** True when the workload runs against the patched MongoDB replica set instead of the Java store. */
+    public boolean mongodbTransport() {
+        return "mongodb".equals(transport);
+    }
+
+    /** True when the MongoDB transport relies on the server-side Chameleon module (parameters, reply envelope). */
+    public boolean mongodbServerHooks() {
+        return mongodbTransport() && !Boolean.FALSE.equals(mongodb.serverHooks);
+    }
+
+    private void validateTransport() {
+        if (transport == null) {
+            transport = "framed";
+        }
+        if (!transport.equals("framed") && !transport.equals("mongodb")) {
+            throw new IllegalArgumentException("transport must be \"framed\" or \"mongodb\", got '" + transport + "'");
+        }
+        if (!mongodbTransport()) {
+            if (mongodb != null) {
+                throw new IllegalArgumentException("mongodb block is only valid with transport: mongodb");
+            }
+            return;
+        }
+        require(mongodb, "mongodb");
+        requirePositive(mongodb.port, "mongodb.port");
+        require(mongodb.replicaSet, "mongodb.replicaSet");
+        require(mongodb.database, "mongodb.database");
+        require(mongodb.collection, "mongodb.collection");
+        requirePositive(mongodb.maxPoolSize, "mongodb.maxPoolSize");
+        requirePositive(mongodb.serverSelectionTimeoutMs, "mongodb.serverSelectionTimeoutMs");
+        requirePositive(mongodb.poolWaitTimeoutMs, "mongodb.poolWaitTimeoutMs");
+        requirePositive(mongodb.statusPollIntervalMs, "mongodb.statusPollIntervalMs");
+        if (mongodb.port > 65_535) {
+            throw new IllegalArgumentException("mongodb.port must be at or below 65535");
+        }
+        if (mongodb.serverHooks == null) {
+            mongodb.serverHooks = true;
+        }
+        if (mongodb.binaryPath != null && mongodb.binaryPath.isBlank()) {
+            throw new IllegalArgumentException("mongodb.binaryPath must be a path or omitted");
+        }
+        if (mongodb.binaryPath != null && mongodb.serverHooks) {
+            throw new IllegalArgumentException("mongodb.binaryPath requires mongodb.serverHooks: false: a binary other"
+                    + " than the patched experiment build has no Chameleon parameters to push");
+        }
+        if (!mongodb.serverHooks && !("weakest".equals(mode) || "strongest".equals(mode))) {
+            throw new IllegalArgumentException("mongodb.serverHooks: false requires mode weakest or strongest: the"
+                    + " chameleon modes need the server to decide, and pileus estimates staleness from the log and"
+                    + " commit indices that only the $chameleon reply envelope carries (got mode '" + mode + "')");
+        }
+        if (server != null && Boolean.TRUE.equals(server.followerLinearizableReads)) {
+            throw new IllegalArgumentException("server.followerLinearizableReads must be false with transport: mongodb:"
+                    + " mongod serves linearizable reads on the primary only, so the client must route them there");
+        }
+        if (nodeFailure != null && Boolean.TRUE.equals(nodeFailure.enabled)) {
+            throw new IllegalArgumentException(
+                    "nodeFailure injection is not supported with transport: mongodb (no inter-server RPC drop hook)");
+        }
+        if (timedFailure != null && Boolean.TRUE.equals(timedFailure.enabled)) {
+            throw new IllegalArgumentException(
+                    "timedFailure injection is not supported with transport: mongodb (no inter-server RPC drop hook)");
+        }
+    }
+
     private void validate() {
+        validateTransport();
         require(cluster, "cluster");
         requirePositive(cluster.numServers, "cluster.numServers");
         require(cluster.serverHosts, "cluster.serverHosts");

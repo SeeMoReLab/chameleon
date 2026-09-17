@@ -143,8 +143,22 @@ GEO_ENABLED="$(cfg geoEnabled)"
 # --- Remote preflight ---
 ssh_run "command -v java >/dev/null && command -v tmux >/dev/null" \
     || die "$HOST is missing java or tmux; provision it first: ./setup_cloudlab.sh $HOST $KEY"
-ssh_run "tmux has-session -t $SESSION 2>/dev/null" \
-    && die "tmux session '$SESSION' already exists on $HOST (previous run?). Inspect: ssh -i $KEY $HOST -t tmux attach -t $SESSION"
+# MongoDB transport (MONGODB_PORT.md): the build step is separate from the run
+# step and leaves the patched binary at ~/tuneable/mongod on the host.
+if [[ "$(cfg transport)" == "mongodb" ]]; then
+    MONGOD_PATH="$(cfg mongodbBinaryPath)"
+    if [[ -n "$MONGOD_PATH" ]]; then
+        ssh_run "test -x ${MONGOD_PATH/#\~/\$HOME}" \
+            || die "$HOST has no executable at mongodb.binaryPath $MONGOD_PATH"
+        echo "mongod on $HOST from mongodb.binaryPath: $MONGOD_PATH ($(ssh_run "${MONGOD_PATH/#\~/\$HOME} --version | head -1"))"
+    else
+        ssh_run "test -x \$HOME/tuneable/mongod" \
+            || die "$HOST has no ~/tuneable/mongod; build it first: ./build_cloudlab.sh $HOST $KEY (after ./setup_cloudlab.sh $HOST $KEY --mongodb)"
+        echo "Patched mongod on $HOST: $(ssh_run 'cat $HOME/tuneable/mongod.build-id 2>/dev/null || echo "(no build id stamp)"')"
+    fi
+fi
+ssh_run "tmux has-session -t =$SESSION 2>/dev/null" \
+    && die "tmux session '$SESSION' already exists on $HOST (previous run?). Inspect: ssh -i $KEY $HOST -t tmux attach -t $SESSION ; or abandon it: ./clean_cloudlab.sh $HOST $KEY"
 
 STAMP="$(date '+%Y%m%d_%H%M%S')"
 RUN_NAME="${LABEL}_${STAMP}"
@@ -216,8 +230,10 @@ fi
 
 # --- Launch inside remote tmux (survives ssh drops) ---
 echo "Starting remote tmux session '$SESSION'..."
+# The runner's own output (server start, replica set init, data load, errors before the
+# driver starts) is kept in runner.log beside run.log; the pane alone would lose it.
 ssh_run "tmux new-session -d -s $SESSION -c \"\$HOME/$REMOTE_RUN\" \
-    \"bash \$HOME/tuneable/cloudlab_remote_run.sh \$HOME/tuneable/app-all.jar $CONFIG_ARCHIVE $NUM_SERVERS $LABEL\""
+    \"bash \$HOME/tuneable/cloudlab_remote_run.sh \$HOME/tuneable/app-all.jar $CONFIG_ARCHIVE $NUM_SERVERS $LABEL 2>&1 | tee runner.log\""
 
 echo
 echo "Experiment running on $HOST (label: $LABEL). Attach with: ssh -i $KEY $HOST -t tmux attach -t $SESSION"
@@ -232,6 +248,7 @@ on_interrupt() {
         echo "  clear delays:  ssh -i $KEY $HOST 'sudo tc qdisc del dev lo root'"
     fi
     echo "  fetch results: scp -i $KEY -r $HOST:$REMOTE_RUN runs/"
+    echo "  abandon it:    ./clean_cloudlab.sh $HOST $KEY   (stops it, clears delays, frees the node for the next run)"
     exit 130
 }
 trap on_interrupt INT
@@ -241,7 +258,7 @@ ssh "${SSH_OPTS[@]}" "$HOST" "touch $REMOTE_RUN/run.log && tail -F $REMOTE_RUN/r
 TAIL_PID=$!
 
 while ! ssh_run "test -f $REMOTE_RUN/run_info.txt" 2>/dev/null; do
-    ssh_run "tmux has-session -t $SESSION 2>/dev/null" || break
+    ssh_run "tmux has-session -t =$SESSION 2>/dev/null" || break
     sleep 5
 done
 
@@ -256,8 +273,11 @@ if [[ "$GEO_APPLIED" == 1 ]]; then
 fi
 
 # --- Fetch results ---
-ssh_run "test -f $REMOTE_RUN/run_info.txt" \
-    || die "remote run ended without run_info.txt (session died?); inspect $HOST:$REMOTE_RUN"
+if ! ssh_run "test -f $REMOTE_RUN/run_info.txt"; then
+    echo "Remote run ended without run_info.txt; last lines of its runner.log:" >&2
+    ssh_run "tail -n 15 $REMOTE_RUN/runner.log 2>/dev/null" | grep -vE "INFO org.mongodb|^\s+at " >&2 || true
+    die "remote run failed before completion; full logs at $HOST:$REMOTE_RUN"
+fi
 # The ledgers carry dense latency-histogram columns and compress ~10:1;
 # gzip on the node before the transfer (analyze_run.py reads .csv.gz
 # directly, so the files stay compressed locally too).

@@ -44,14 +44,7 @@ import io.netty.handler.flush.FlushConsolidationHandler;
  * (run_all_cloudlab.sh's tc/netem filters, matching on source/destination IP
  * pairs) can tell the sites apart; a null entry leaves the source unbound.
  */
-public final class KvFramedTransport implements AutoCloseable {
-
-    public record RpcFailure(Status status, long serverReplyEpochMs) {
-    }
-
-    public interface RequestHandle {
-        void cancel();
-    }
+public final class KvFramedTransport implements KvTransport {
 
     private final EventLoopGroup ioGroup;
     private final ExecutorService callbackExecutor;

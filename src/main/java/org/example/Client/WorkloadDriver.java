@@ -158,7 +158,12 @@ public class WorkloadDriver {
     // state (session index, per-key floors, RTT windows, Pileus windows);
     // only the framed transport and metrics ledger are shared.
     private static KvSessionClient[][] appSessions;
-    private static KvFramedTransport framedTransport;
+    // The wire: the framed KV protocol against the Java store, or the MongoDB
+    // wire protocol against the patched replica set (config transport).
+    private static KvTransport transport;
+    // Cluster administration when the transport is MongoDB; null otherwise
+    // (the Java store is administered over the gRPC admin stubs below).
+    private static MongoClusterControl mongoControl;
     private static int SESSIONS_PER_APPLICATION;
     // Injection threads; sessions are sharded across them so every session
     // stays driven by exactly one thread (a session is one logical actor).
@@ -254,10 +259,6 @@ public class WorkloadDriver {
 
         clearCSVFiles();
 
-        connectAdminStubs();
-        waitForClusterReachable();
-        applyNodeFailureConfig();
-
         // One connection pool per (site, server); when geo is enabled every
         // site binds its own 127.0.2.x source IP so the delay rules can match
         // per-site (source, destination) pairs. Session s of every application
@@ -268,14 +269,32 @@ public class WorkloadDriver {
         for (int site = 0; site < numSites; site++) {
             siteBindHosts.add(GEO_ENABLED ? ExperimentConfig.clientSiteBindHost(site) : null);
         }
-        framedTransport = new KvFramedTransport(SERVER_HOSTS, CLIENT_BASE_PORT,
-                INGRESS_CONNECTIONS_PER_SERVER, siteBindHosts);
+
+        if (config.mongodbTransport()) {
+            // The patched replica set: wait for it, push the Chameleon parameters and the
+            // SLA table, and poll its serverStatus into occupancy_<n>.csv (MONGODB_PORT.md).
+            mongoControl = new MongoClusterControl(config);
+            mongoControl.waitForReplicaSet(CLUSTER_REACHABLE_TIMEOUT_MS);
+            mongoControl.applyServerParameters(CLIENT_MODE);
+            mongoControl.startOccupancyPolling();
+            transport = new MongoTransport(new MongoTransport.Settings(SERVER_HOSTS, config.mongodb.port,
+                    config.mongodb.replicaSet, config.mongodb.database, config.mongodb.collection,
+                    config.mongodb.maxPoolSize, config.mongodb.serverSelectionTimeoutMs,
+                    config.mongodb.poolWaitTimeoutMs, siteBindHosts, CLIENT_SITE_NAMES,
+                    config.mongodbServerHooks()));
+        } else {
+            connectAdminStubs();
+            waitForClusterReachable();
+            applyNodeFailureConfig();
+            transport = new KvFramedTransport(SERVER_HOSTS, CLIENT_BASE_PORT,
+                    INGRESS_CONNECTIONS_PER_SERVER, siteBindHosts);
+        }
         appSessions = new KvSessionClient[NUM_APPLICATIONS][SESSIONS_PER_APPLICATION];
         for (int app = 0; app < NUM_APPLICATIONS; app++) {
             for (int session = 0; session < SESSIONS_PER_APPLICATION; session++) {
                 int siteId = session % numSites;
                 appSessions[app][session] = new KvSessionClient(app + 1, siteId,
-                        CLIENT_SITE_NAMES.get(siteId), framedTransport, CLIENT_MODE,
+                        CLIENT_SITE_NAMES.get(siteId), transport, CLIENT_MODE,
                         RTT_WINDOW_SIZE, CLIENT_RETRY_LIMIT, CLIENT_LOST_TIMEOUT_MS,
                         readSlasByApp.get(app + 1), writeSlasByApp.get(app + 1),
                         EXPLORATION_FRACTION, FOLLOWER_LIN_READS,
@@ -352,6 +371,9 @@ public class WorkloadDriver {
 
     /** The id of the current healthy leader, or -1 if none is visible. */
     private static int findLeaderId() {
+        if (mongoControl != null) {
+            return mongoControl.findLeaderId();
+        }
         for (int i = 0; i < NUM_OF_SERVERS; i++) {
             try {
                 AdminStatusReply status = statusOf(i);
@@ -378,6 +400,10 @@ public class WorkloadDriver {
     }
 
     private static void setDropTraffic(int nodeId, boolean drop) {
+        if (mongoControl != null) {
+            throw new UnsupportedOperationException(
+                    "failure injection is not supported with transport: mongodb (the config loader rejects it)");
+        }
         adminStubs[nodeId]
                 .withDeadlineAfter(ADMIN_RPC_DEADLINE_MS, TimeUnit.MILLISECONDS)
                 .setDropTraffic(SetDropTrafficRequest.newBuilder().setDrop(drop).build());
@@ -385,6 +411,10 @@ public class WorkloadDriver {
 
     /** Ask every server process to shut down; failures are reported, not fatal. */
     private static void shutdownCluster() {
+        if (mongoControl != null) {
+            mongoControl.shutdownCluster();
+            return;
+        }
         for (int i = 0; i < NUM_OF_SERVERS; i++) {
             try {
                 adminStubs[i]
@@ -598,14 +628,34 @@ public class WorkloadDriver {
                     "%nExperiment completed. Sent=%d Responses=%d Rejected=%d Lost=%d Violations=%d%n",
                     totalInjected.sum(), ClientMetricsTracker.totalResponses(), ClientMetricsTracker.totalRejected(),
                     ClientMetricsTracker.totalLost(), violations);
+            if (transport instanceof MongoTransport mongoTransport) {
+                System.out.print(mongoTransport.driverEventSummary());
+            }
+            var errorsByCause = ClientMetricsTracker.transportErrorsByCause();
+            if (!errorsByCause.isEmpty()) {
+                System.out.println("Transport errors by cause (every attempt, retries included):");
+                for (var e : errorsByCause) {
+                    System.out.printf("  %10d  %s%n", e.getValue(), e.getKey());
+                    for (String sample : ClientMetricsTracker.transportErrorSamples(e.getKey())) {
+                        System.out.println("              sample: " + sample);
+                    }
+                }
+            }
             for (KvSessionClient[] sessions : appSessions) {
                 for (KvSessionClient client : sessions) {
                     client.close();
                 }
             }
-            framedTransport.close();
+            transport.close();
+            if (mongoControl != null) {
+                // No serverStatus poll may be in flight while the nodes go down.
+                mongoControl.stopOccupancyPolling();
+            }
             System.out.println("Shutting down server processes...");
             shutdownCluster();
+            if (mongoControl != null) {
+                mongoControl.close();
+            }
             // Deadline violations are an expected experiment outcome under
             // overload, not a process correctness failure.
             System.exit(0);

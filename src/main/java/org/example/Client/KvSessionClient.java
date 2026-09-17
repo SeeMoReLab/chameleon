@@ -74,7 +74,7 @@ public final class KvSessionClient implements AutoCloseable {
     private final Map<Integer, Integer> readFloors;
     private final Map<Integer, Integer> writeFloors;
 
-    private final KvFramedTransport transport;
+    private final KvTransport transport;
     private final boolean ownsTransport;
     private final RttEstimator rttEstimator;
     private final PileusSelector selector; // null unless the mode routes with Pileus
@@ -95,7 +95,7 @@ public final class KvSessionClient implements AutoCloseable {
     // rejected, lost, and absent-key results do not move it. Grading always
     // uses the value a request was sent with, never the live one, so a read's
     // causal obligation is fixed at the moment it is issued.
-    private final AtomicInteger sessionIndex = new AtomicInteger(-1);
+    private final AtomicLong sessionIndex = new AtomicLong(-1);
 
     private final ConcurrentHashMap<Long, Pending> pending = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -118,7 +118,7 @@ public final class KvSessionClient implements AutoCloseable {
         final double targetThresholdMs;
         final int targetStrength;
         final boolean suppressServerWait;
-        volatile KvFramedTransport.RequestHandle transportHandle;
+        volatile KvTransport.RequestHandle transportHandle;
 
         Pending(KvRequest request, long firstSendNanos, long firstSendMs, int targetNode, int attempt,
                 long deadlineNanos,
@@ -147,7 +147,7 @@ public final class KvSessionClient implements AutoCloseable {
                 explorationFraction, followerLinReads, admissionAwareRouting, admitRateGamma, 42L);
     }
 
-    public KvSessionClient(int applicationId, int siteId, String siteName, KvFramedTransport transport,
+    public KvSessionClient(int applicationId, int siteId, String siteName, KvTransport transport,
             ClientMode mode,
             int rttWindowSize, int retryLimit, long lostTimeoutMs,
             Map<Integer, List<RungScorer.Rung>> readSlas, Map<Integer, List<RungScorer.Rung>> writeSlas,
@@ -158,7 +158,7 @@ public final class KvSessionClient implements AutoCloseable {
                 admissionAwareRouting, admitRateGamma, seed);
     }
 
-    private KvSessionClient(int applicationId, int siteId, String siteName, KvFramedTransport transport,
+    private KvSessionClient(int applicationId, int siteId, String siteName, KvTransport transport,
             boolean ownsTransport, ClientMode mode,
             int rttWindowSize, int retryLimit, long lostTimeoutMs,
             Map<Integer, List<RungScorer.Rung>> readSlas, Map<Integer, List<RungScorer.Rung>> writeSlas,
@@ -237,7 +237,7 @@ public final class KvSessionClient implements AutoCloseable {
     // ===== Sending =====
 
     public void sendRead(String key, int slaId) {
-        int sessionIndex = this.sessionIndex.get();
+        long sessionIndex = this.sessionIndex.get();
 
         List<RungScorer.Rung> sla = slaOf(readSlas, slaId);
         AdmitRates admitRates = admitRatesFor(true, slaId);
@@ -282,6 +282,7 @@ public final class KvSessionClient implements AutoCloseable {
                 .setSessionIndex(sessionIndex);
         if (targetRung != null) {
             request.setWantLinearizable(targetRung.strength() == ReadLevel.LINEARIZABLE.getNumber());
+            request.setTargetReadLevel(ReadLevel.forNumber(targetRung.strength()));
         }
         dispatch(request.build(), targetNode, 1, predicted,
                 targetRung == null ? 0 : targetRung.thresholdMs(),
@@ -309,7 +310,7 @@ public final class KvSessionClient implements AutoCloseable {
             }
         }
 
-        int sessionIndex = this.sessionIndex.get();
+        long sessionIndex = this.sessionIndex.get();
         KvRequest.Builder request = KvRequest.newBuilder()
                 .setRequestId(requestIdGen.incrementAndGet())
                 .setApplicationId(applicationId)
@@ -568,7 +569,7 @@ public final class KvSessionClient implements AutoCloseable {
                         verdict.gradedStrength() >= entry.targetStrength);
             }
         } else {
-            int index = response.getValueIndex();
+            long index = response.getValueIndex();
             executed = "W:" + response.getDeliveredWriteConcern();
             if (selector != null) {
                 selector.observeWrite(request.getRequestedWriteConcern() > 0
@@ -587,17 +588,17 @@ public final class KvSessionClient implements AutoCloseable {
     }
 
     /** The session's current causal frontier (-1 = nothing observed yet). */
-    public int sessionIndex() {
+    public long sessionIndex() {
         return sessionIndex.get();
     }
 
-    private void advanceSessionIndex(int observedIndex) {
+    private void advanceSessionIndex(long observedIndex) {
         if (observedIndex >= 0) {
             sessionIndex.accumulateAndGet(observedIndex, Math::max);
         }
     }
 
-    private void handleRpcError(int nodeId, Pending entry, KvFramedTransport.RpcFailure failure) {
+    private void handleRpcError(int nodeId, Pending entry, KvTransport.RpcFailure failure) {
         Status status = failure.status();
         long requestId = entry.request.getRequestId();
         if (pending.get(requestId) != entry) {
@@ -630,6 +631,7 @@ public final class KvSessionClient implements AutoCloseable {
                     failure.serverReplyEpochMs(), System.currentTimeMillis());
             return;
         }
+        ClientMetricsTracker.recordTransportError(status.getDescription());
         if (entry.attempt < retryLimit && System.nanoTime() < entry.deadlineNanos) {
             dispatch(entry.request, Math.floorMod(roundRobin.getAndIncrement(), numServers),
                     entry.attempt + 1, 0, 0, -1, false);
@@ -666,7 +668,7 @@ public final class KvSessionClient implements AutoCloseable {
             Map.Entry<Long, Pending> e = it.next();
             if (now - e.getValue().firstSendMs >= lostTimeoutMs) {
                 it.remove();
-                KvFramedTransport.RequestHandle handle = e.getValue().transportHandle;
+                KvTransport.RequestHandle handle = e.getValue().transportHandle;
                 if (handle != null) {
                     handle.cancel();
                 }
@@ -686,7 +688,7 @@ public final class KvSessionClient implements AutoCloseable {
         }
         lostSweeper.shutdownNow();
         pending.values().forEach(entry -> {
-            KvFramedTransport.RequestHandle handle = entry.transportHandle;
+            KvTransport.RequestHandle handle = entry.transportHandle;
             if (handle != null) {
                 handle.cancel();
             }
