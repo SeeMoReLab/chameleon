@@ -109,6 +109,8 @@ public final class MongoTransport implements KvTransport {
     private final MongoDriverEvents[] siteEvents;
     private final MongoDatabase[] siteDatabases;
     private final ReadPreference[] nodePreferences;
+    /** Per node, the address string the driver's pool events are keyed by. */
+    private final String[] nodeAddresses;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public MongoTransport(Settings settings) {
@@ -137,9 +139,27 @@ public final class MongoTransport implements KvTransport {
             siteDatabases[site] = siteClients[site].getDatabase(settings.database());
         }
         this.nodePreferences = new ReadPreference[settings.hosts().size()];
+        this.nodeAddresses = new String[settings.hosts().size()];
         for (int node = 0; node < nodePreferences.length; node++) {
             nodePreferences[node] = ReadPreference.nearest(new TagSet(new Tag("node", Integer.toString(node))));
+            nodeAddresses[node] = new ServerAddress(settings.hosts().get(node), settings.port()).toString();
         }
+    }
+
+    /**
+     * Whether a request with {@code remainingMs} left should be refused rather than
+     * queued for a connection to {@code address}. True only for a pool that already
+     * holds its full complement, since a pool that can still grow makes a waiting
+     * request productive; a full pool's queue is other requests' round trips, and
+     * waiting out a queue longer than the deadline misses it and holds a slot meanwhile.
+     */
+    static boolean refuseForQueue(MongoDriverEvents events, String address, int maxPoolSize, long remainingMs) {
+        return events.poolSaturated(address, maxPoolSize) && events.checkoutWaitMs(address) > remainingMs;
+    }
+
+    @Override
+    public double queueWaitMs(int siteId, int nodeId) {
+        return siteEvents[siteId].checkoutWaitMs(nodeAddresses[nodeId]);
     }
 
     /** Driver settings for one site's client; the transport is the site's bound Netty channel. */
@@ -195,6 +215,22 @@ public final class MongoTransport implements KvTransport {
             return () -> { };
         }
         long maxTimeMs = Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingDeadlineNanos));
+        // Do not enter a queue longer than the deadline. The driver's pool wait is one
+        // setting for every request, so it has to cover a cold pool's first connection
+        // (two round trips to a far node) and is therefore far longer than most SLA
+        // deadlines; a request that waits it out has missed its deadline before it
+        // reaches mongod, and while it waits it holds a queue slot that a request with
+        // a longer deadline could have used. Only a pool that cannot grow is refused:
+        // while it is still opening connections the wait is productive.
+        MongoDriverEvents events = siteEvents[siteId];
+        String address = nodeAddresses[nodeId];
+        if (refuseForQueue(events, address, settings.maxPoolSize(), maxTimeMs)) {
+            onError.accept(new RpcFailure(Status.DEADLINE_EXCEEDED.withDescription(
+                    "connection pool at " + address + " is full and its checkout queue is "
+                            + Math.round(events.checkoutWaitMs(address)) + " ms against " + maxTimeMs
+                            + " ms of deadline left"), 0));
+            return () -> { };
+        }
         Document command = request.getIsRead() ? findCommand(request, maxTimeMs) : updateCommand(request, maxTimeMs);
         Publisher<Document> publisher = siteDatabases[siteId].runCommand(command, nodePreferences[nodeId]);
 

@@ -593,12 +593,14 @@ mongodb:
   # A node that cannot be selected within this fails the request as a
   # transport failure (retried by the session client) instead of stalling.
   serverSelectionTimeoutMs: 200
-  # How long a checkout waits for a pooled connection. Pools grow on demand
-  # (all at once, up to maxPoolSize) and an open costs two round trips, up to
-  # 640 ms between the farthest sites on the global topology, so a request
-  # that arrives while its pool is growing waits for the open instead of
-  # failing; after the warm-up every connection exists and checkout is
-  # immediate. Pool wait counts inside end-to-end latency.
+  # Ceiling on how long a checkout waits for a pooled connection. It covers the
+  # slowest case a wait can be worth: a pool still growing, whose open costs two
+  # round trips, up to 640 ms between the farthest sites on the global topology.
+  # Once a pool holds maxPoolSize connections it can only queue, and the
+  # transport then refuses any request whose remaining deadline is shorter than
+  # the queue rather than letting it wait here and miss its deadline anyway.
+  # Pool wait counts inside end-to-end latency, but is kept out of the round trip
+  # estimate sent to the scorer, which is about the node rather than our queue.
   poolWaitTimeoutMs: 1000
   # serverStatus poll period that feeds occupancy_<n>.csv.
   statusPollIntervalMs: 100

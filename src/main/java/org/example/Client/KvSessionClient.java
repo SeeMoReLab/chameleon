@@ -504,7 +504,7 @@ public final class KvSessionClient implements AutoCloseable {
             // so nothing updates rho) and the scorer keeps rejecting on the
             // stale estimate long after the queues have drained.
             double rejectLatencyMs = (responseReceiveNanos - entry.firstSendNanos) / 1_000_000.0;
-            rttEstimator.observe(nodeId, rejectLatencyMs, response.getServiceTimeMs());
+            observeRtt(nodeId, rejectLatencyMs, response.getServiceTimeMs());
             AdmitRates admitRates = admitRatesFor(request.getIsRead(), request.getSlaId());
             if (admitRates != null) {
                 admitRates.onReject(nodeId);
@@ -535,7 +535,7 @@ public final class KvSessionClient implements AutoCloseable {
             return;
         }
         double latencyMs = (System.nanoTime() - entry.firstSendNanos) / 1_000_000.0;
-        rttEstimator.observe(nodeId, latencyMs, response.getServiceTimeMs());
+        observeRtt(nodeId, latencyMs, response.getServiceTimeMs());
         AdmitRates admitRates = admitRatesFor(request.getIsRead(), request.getSlaId());
         if (admitRates != null) {
             admitRates.onAdmit(nodeId);
@@ -616,7 +616,7 @@ public final class KvSessionClient implements AutoCloseable {
             }
             KvRequest request = entry.request;
             double rejectLatencyMs = (System.nanoTime() - entry.firstSendNanos) / 1_000_000.0;
-            rttEstimator.observe(nodeId, rejectLatencyMs, 0);
+            observeRtt(nodeId, rejectLatencyMs, 0);
             AdmitRates admitRates = admitRatesFor(request.getIsRead(), request.getSlaId());
             if (admitRates != null) {
                 admitRates.onReject(nodeId);
@@ -644,6 +644,19 @@ public final class KvSessionClient implements AutoCloseable {
                 ClientMetricsTracker.recordFailure(nodeId, siteName, chosenLabel(entry.request));
             }
         }
+    }
+
+    /**
+     * Feed one round trip sample, less anything the request spent queued inside the
+     * transport. The estimate goes to the scorer as the network cost of reaching this
+     * node, and the scorer refuses a rung whose deadline that cost cannot meet, so
+     * charging the client's own queueing to the node makes every node look unreachable
+     * once the client is busy and turns a local queue into cluster-wide refusals. The
+     * estimator discards a negative difference, so over-subtraction drops the sample
+     * rather than biasing the window.
+     */
+    private void observeRtt(int nodeId, double latencyMs, double serviceTimeMs) {
+        rttEstimator.observe(nodeId, latencyMs - transport.queueWaitMs(siteId, nodeId), serviceTimeMs);
     }
 
     private static String chosenLabel(KvRequest request) {

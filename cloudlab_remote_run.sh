@@ -64,8 +64,13 @@ if [[ "$TRANSPORT" == "mongodb" ]]; then
         rm -rf "$DBPATH" && mkdir -p "$DBPATH"
         # --nounixsocket: five mongods on one port would all bind /tmp/mongodb-<port>.sock and
         # race on it (each unlinks a stale file before binding; one loses with EADDRINUSE).
+        # --slowOpSampleRate: mongod logs every operation slower than --slowms (100 ms), and
+        # under geo most operations on the primary cross that, so unsampled logs reach
+        # gigabytes per run. One in a thousand keeps a uniform diagnostic sample. Both are
+        # startup options (operationProfiling.*), not setParameter parameters.
         LD_PRELOAD="$BINDSRC" BINDSRC_ADDR="${HOSTS[$i]}" \
         "$MONGOD" --replSet "$RS" --bind_ip "${HOSTS[$i]}" --port "$PORT" --dbpath "$DBPATH" --nounixsocket \
+            --slowOpSampleRate 0.001 \
             --logpath "$(pwd)/mongod_$i.log" --logappend --oplogSize 4096 > "mongod_${i}.stdout" 2>&1 &
         SERVER_PIDS+=($!)
     done

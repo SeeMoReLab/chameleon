@@ -589,3 +589,19 @@ bash run_all_cloudlab_sweep.sh kevindmw@clnode335.clemson.cloudlab.us ~/.ssh/clo
 bash run_all_cloudlab_sweep.sh kevindmw@clnode348.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "9000" --seeds "100" "config_regional.yaml;config_global.yaml"
 bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "18000" --seeds "100" "config_regional.yaml;config_global.yaml"
 bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "1125" --seeds "100" "config_regional.yaml;config_global.yaml"
+<!-- MongoDB (MONGODB_PORT.md). Same sweep script; the node must carry the patched mongod
+     (build_cloudlab.sh). C = 100,000 on the global topology, sMax 450, budget 85,000, pool cap 1,000
+     (MONGODB_BASELINES.md 3i). Runs land in runs/config_mongodb_<loadsweep|global>_<mode>_<sMax>_<seed>/.
+     The static load sweep is 10 minutes per arm, the day sequence 31; a four-arm pass of both is about 2 h 45 min.
+     chameleonPileus has not been smoked against mongod; add it to --modes only after a config_mongodb_smoke_geo run in that mode. -->
+
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_mongodb_loadsweep.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_mongodb_global.yaml"
+
+<!-- MongoDB sMax sensitivity, the same 0.25x to 4x ladder as the Java store's (1125 to 18000 around 4500), around 450.
+     One node per sMax value if several nodes are provisioned; on one node, run them in sequence. -->
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "112.5;225;900;1800" --seeds "42" "config_mongodb_loadsweep.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "112.5;225;900;1800" --seeds "42" "config_mongodb_global.yaml"
+
+<!-- MongoDB repeats under other seeds, as for the Java store -->
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "7;100" "config_mongodb_loadsweep.yaml;config_mongodb_global.yaml"

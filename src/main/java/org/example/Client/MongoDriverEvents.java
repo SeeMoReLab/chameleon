@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.mongodb.connection.ServerDescription;
@@ -13,6 +14,9 @@ import com.mongodb.connection.ServerType;
 import com.mongodb.event.ClusterDescriptionChangedEvent;
 import com.mongodb.event.ClusterListener;
 import com.mongodb.event.ConnectionCheckOutFailedEvent;
+import com.mongodb.event.ConnectionCheckedOutEvent;
+import com.mongodb.event.ConnectionClosedEvent;
+import com.mongodb.event.ConnectionCreatedEvent;
 import com.mongodb.event.ConnectionPoolClearedEvent;
 import com.mongodb.event.ConnectionPoolListener;
 import com.mongodb.event.ServerDescriptionChangedEvent;
@@ -101,6 +105,10 @@ final class MongoDriverEvents implements ServerListener, ClusterListener, Connec
     @Override
     public void connectionCheckOutFailed(ConnectionCheckOutFailedEvent event) {
         checkoutFailed.computeIfAbsent(event.getReason().toString(), k -> new AtomicLong()).incrementAndGet();
+        // A checkout that gave up waited at least this long; dropping it would bias the
+        // estimate downwards exactly when the queue is at its worst.
+        pool(event.getServerId().getAddress().toString())
+                .sampleWait(event.getElapsedTime(TimeUnit.MILLISECONDS));
     }
 
     @Override
@@ -115,6 +123,75 @@ final class MongoDriverEvents implements ServerListener, ClusterListener, Connec
         heartbeatFailed.computeIfAbsent(address, k -> new AtomicLong()).incrementAndGet();
         sample(heartbeatFailedSamples, at() + " " + address + " after " + event.getElapsedTime(TimeUnit.MILLISECONDS)
                 + " ms: " + event.getThrowable());
+    }
+
+    // ===== Per-pool queueing state =====
+    //
+    // A pooled connection is held for one round trip, so a saturated pool queues
+    // checkouts. That wait is ours, not the node's: it must be kept out of the round
+    // trip estimate the scorer reads, and a request must not enter a queue longer than
+    // its own deadline. Both need a live view per pool, which the driver only exposes
+    // through these events.
+    private static final double WAIT_EWMA_ALPHA = 0.05;
+
+    private static final class Pool {
+        final AtomicLong waitMsBits = new AtomicLong(Double.doubleToLongBits(0.0));
+        final AtomicInteger size = new AtomicInteger();
+
+        void sampleWait(double ms) {
+            waitMsBits.accumulateAndGet(Double.doubleToLongBits(ms), (prevBits, sampleBits) -> {
+                double prev = Double.longBitsToDouble(prevBits);
+                double sample = Double.longBitsToDouble(sampleBits);
+                return Double.doubleToLongBits(prev + WAIT_EWMA_ALPHA * (sample - prev));
+            });
+        }
+
+        double waitMs() {
+            return Double.longBitsToDouble(waitMsBits.get());
+        }
+    }
+
+    private final Map<String, Pool> pools = new ConcurrentHashMap<>();
+
+    private Pool pool(String address) {
+        return pools.computeIfAbsent(address, k -> new Pool());
+    }
+
+    /**
+     * Recent mean time a checkout waited for a connection to this address, in ms.
+     * Smoothed per pool rather than tracked per request: every checkout queued on a
+     * pool at the same moment waits about the same, so the queue is the right
+     * granularity and the driver gives no per-request handle to correlate against.
+     */
+    double checkoutWaitMs(String address) {
+        Pool p = pools.get(address);
+        return p == null ? 0.0 : p.waitMs();
+    }
+
+    /**
+     * Whether this pool holds its full complement of connections, so a checkout can
+     * only wait for one to come free rather than for a new one to open. Below this a
+     * wait is productive (the pool is still growing) and must not be refused.
+     */
+    boolean poolSaturated(String address, int maxPoolSize) {
+        Pool p = pools.get(address);
+        return p != null && p.size.get() >= maxPoolSize;
+    }
+
+    @Override
+    public void connectionCheckedOut(ConnectionCheckedOutEvent event) {
+        pool(event.getConnectionId().getServerId().getAddress().toString())
+                .sampleWait(event.getElapsedTime(TimeUnit.MILLISECONDS));
+    }
+
+    @Override
+    public void connectionCreated(ConnectionCreatedEvent event) {
+        pool(event.getConnectionId().getServerId().getAddress().toString()).size.incrementAndGet();
+    }
+
+    @Override
+    public void connectionClosed(ConnectionClosedEvent event) {
+        pool(event.getConnectionId().getServerId().getAddress().toString()).size.decrementAndGet();
     }
 
     boolean quiet() {

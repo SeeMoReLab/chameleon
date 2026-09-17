@@ -28,6 +28,17 @@ public interface KvTransport extends AutoCloseable {
     int numSites();
 
     /**
+     * Recent time a request waits inside this transport before it reaches the network,
+     * in ms, for the given path. Queueing here is a property of the client, not of the
+     * node, so the session client keeps it out of the round trip estimate it feeds the
+     * scorer. Zero for a transport that never queues: the framed protocol multiplexes
+     * over pre-opened sockets and accepts a write without waiting.
+     */
+    default double queueWaitMs(int siteId, int nodeId) {
+        return 0.0;
+    }
+
+    /**
      * Send {@code request} to {@code nodeId} from {@code siteId}. Exactly one
      * of {@code onResponse} or {@code onError} fires, on a transport thread.
      * {@code remainingDeadlineNanos} bounds the whole exchange.

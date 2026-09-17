@@ -240,4 +240,34 @@ class MongoTransportTest {
         assertTrue(reply.getDeadlineExceeded());
         assertFalse(reply.getRejected());
     }
+
+    @Test
+    void aTransportThatDoesNotQueueReportsNoQueueWait() {
+        // The framed transport multiplexes over pre-opened sockets and accepts a write
+        // without waiting, so it inherits this default and the session client subtracts
+        // nothing. Only the pooled MongoDB transport overrides it.
+        KvTransport noQueue = new KvTransport() {
+            @Override
+            public int numServers() {
+                return 5;
+            }
+
+            @Override
+            public int numSites() {
+                return 6;
+            }
+
+            @Override
+            public RequestHandle execute(int siteId, int nodeId, KvRequest request, long remainingDeadlineNanos,
+                    java.util.function.Consumer<KvResponse> onResponse,
+                    java.util.function.Consumer<RpcFailure> onError) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        assertEquals(0.0, noQueue.queueWaitMs(3, 2));
+    }
 }

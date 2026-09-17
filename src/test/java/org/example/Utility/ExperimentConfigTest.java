@@ -20,7 +20,7 @@ class ExperimentConfigTest {
     // Surefire's working directory is the build directory, a direct child of
     // the repo root, so the repo config is one level up.
     private static final Path REPO_CONFIG = Path.of("..", "config_local.yaml");
-    private static final Path MONGODB_CONFIG = Path.of("..", "config_mongodb_smoke.yaml");
+    private static final Path MONGODB_CONFIG = Path.of("..", "config_mongodb_global.yaml");
 
     @Test
     void repoConfigLoadsAndValidates() {
@@ -185,7 +185,7 @@ class ExperimentConfigTest {
 
     @Test
     void mongodbServerHooksDefaultOnAndOffOnlyForClientDecidedModes() throws IOException {
-        assertTrue(Files.exists(MONGODB_CONFIG), "repo config_mongodb_smoke.yaml must exist");
+        assertTrue(Files.exists(MONGODB_CONFIG), "repo config_mongodb_global.yaml must exist");
         String base = Files.readString(MONGODB_CONFIG);
         ExperimentConfig config = ExperimentConfig.load(MONGODB_CONFIG);
         assertTrue(config.mongodbServerHooks(), "the switch defaults to on");
