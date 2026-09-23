@@ -260,14 +260,16 @@ public class WorkloadDriver {
         clearCSVFiles();
 
         // One connection pool per (site, server); when geo is enabled every
-        // site binds its own 127.0.2.x source IP so the delay rules can match
-        // per-site (source, destination) pairs. Session s of every application
-        // lives at site s mod #sites, so sessions spread evenly (the loader
-        // rejects configs where they would not divide).
+        // site binds its own source IP so the delay rules can match per-site
+        // (source, destination) pairs - 127.0.2.x on a single-host run, or the
+        // routable aliases in geo.clientSiteBindHosts on a distributed one.
+        // Session s of every application lives at site s mod #sites, so
+        // sessions spread evenly (the loader rejects configs where they would
+        // not divide).
         int numSites = CLIENT_SITE_NAMES.size();
         List<String> siteBindHosts = new ArrayList<>();
         for (int site = 0; site < numSites; site++) {
-            siteBindHosts.add(GEO_ENABLED ? ExperimentConfig.clientSiteBindHost(site) : null);
+            siteBindHosts.add(GEO_ENABLED ? config.siteBindHost(site) : null);
         }
 
         if (config.mongodbTransport()) {
@@ -552,10 +554,23 @@ public class WorkloadDriver {
         // sent counter: sessions are sharded across them, so every session
         // keeps a single driving thread.
         LongAdder totalInjected = new LongAdder();
+        // Requests the schedule called for that no thread ever sent. A worker
+        // that falls a full tick behind re-anchors instead of catching up, and
+        // that dropped budget is invisible in every other counter: the run then
+        // reports a smaller offered load as though it were the configured one,
+        // which silently turns an overload phase into a milder one.
+        LongAdder skippedBudget = new LongAdder();
+        // Skips during the opening phase are excluded from the warning below.
+        // That phase exists to absorb JIT warm-up and always loses a little: the
+        // two smoke runs skipped 98,333 and 14,000 requests there and exactly
+        // zero afterwards. A warning that fires on every healthy run is noise.
+        LongAdder skippedWarmUp = new LongAdder();
         Thread[] workers = new Thread[INJECTOR_THREADS];
         for (int t = 0; t < INJECTOR_THREADS; t++) {
             int shard = t;
-            workers[t] = new Thread(() -> injectShard(shard, totalInjected), "SystemInjector-" + shard);
+            workers[t] = new Thread(
+                    () -> injectShard(shard, totalInjected, skippedBudget, skippedWarmUp),
+                    "SystemInjector-" + shard);
             workers[t].start();
         }
 
@@ -565,6 +580,7 @@ public class WorkloadDriver {
             long lastReportTime = System.currentTimeMillis();
             // Progress lines report per-interval deltas, not running totals.
             long lastSent = 0;
+            long lastSkipped = 0;
             long lastServed = 0;
             long lastRejected = 0;
             long lastLost = 0;
@@ -590,13 +606,16 @@ public class WorkloadDriver {
                     long violationsNow = ClientMetricsTracker.totalViolations();
                     double predictedNow = ClientMetricsTracker.totalPredictedProfit();
                     double realizedNow = ClientMetricsTracker.totalRealizedProfit();
+                    long skippedNow = skippedBudget.sum();
                     System.out.printf(
-                            "[%02ds] Sent=%d | Served=%d | Rejected=%d | Lost=%d | Violations=%d | PredictedProfit=%.0f | RealizedProfit=%.0f | Phase=%s | TotalTPS=%d%n",
-                            elapsedSeconds, sent - lastSent, served - lastServed,
+                            "[%02ds] Sent=%d | Skipped=%d | Served=%d | Rejected=%d | Lost=%d | Violations=%d | PredictedProfit=%.0f | RealizedProfit=%.0f | Phase=%s | TotalTPS=%d%n",
+                            elapsedSeconds, sent - lastSent, skippedNow - lastSkipped,
+                            served - lastServed,
                             rejectedNow - lastRejected, lostNow - lastLost,
                             violationsNow - lastViolations,
                             predictedNow - lastPredicted, realizedNow - lastRealized,
                             phase.name, phase.totalTPS);
+                    lastSkipped = skippedNow;
                     lastSent = sent;
                     lastServed = served;
                     lastRejected = rejectedNow;
@@ -624,10 +643,32 @@ public class WorkloadDriver {
             }
             ClientMetricsTracker.flushNow();
             long violations = ClientMetricsTracker.totalViolations();
+            long sentTotal = totalInjected.sum();
+            long skippedTotal = skippedBudget.sum();
             System.out.printf(
-                    "%nExperiment completed. Sent=%d Responses=%d Rejected=%d Lost=%d Violations=%d%n",
-                    totalInjected.sum(), ClientMetricsTracker.totalResponses(), ClientMetricsTracker.totalRejected(),
-                    ClientMetricsTracker.totalLost(), violations);
+                    "%nExperiment completed. Sent=%d Skipped=%d Responses=%d Rejected=%d Lost=%d Violations=%d"
+                            + " ClientDropped=%d%n",
+                    sentTotal, skippedTotal, ClientMetricsTracker.totalResponses(),
+                    ClientMetricsTracker.totalRejected(),
+                    ClientMetricsTracker.totalLost(), violations, ClientMetricsTracker.totalClientDropped());
+            // 0.01% is a handful of requests lost to a JIT pause at startup and
+            // says nothing; warning on it would train the reader to ignore the
+            // warning that matters. The count is reported unconditionally above.
+            long skippedMeasured = skippedTotal - skippedWarmUp.sum();
+            long configured = sentTotal + skippedTotal;
+            if (skippedWarmUp.sum() > 0) {
+                System.out.printf("  of which %d were skipped during %s and are not counted below%n",
+                        skippedWarmUp.sum(), PHASES.get(0).name);
+            }
+            if (skippedMeasured * 10000L > configured) {
+                System.out.printf(
+                        "WARNING: the injector skipped %d requests outside %s, of %d the phase schedule"
+                                + " called for (%.2f%%). The measured offered rate is NOT the configured one,"
+                                + " so any phase defined as a multiple of C is running at an unknown"
+                                + " multiple. Raise workload.injectorThreads or lower the phase rates.%n",
+                        skippedMeasured, PHASES.get(0).name, configured,
+                        100.0 * skippedMeasured / configured);
+            }
             if (transport instanceof MongoTransport mongoTransport) {
                 System.out.print(mongoTransport.driverEventSummary());
             }
@@ -670,7 +711,8 @@ public class WorkloadDriver {
      * tick's request budget, with the division remainder spread over the
      * lowest shards so the per-tick total stays exact.
      */
-    private static void injectShard(int shard, LongAdder totalInjected) {
+    private static void injectShard(int shard, LongAdder totalInjected,
+            LongAdder skippedBudget, LongAdder skippedWarmUp) {
         // Distinct deterministic stream per shard; Random scrambles the seed
         // internally, so sequential seeds do not correlate the streams.
         Random random = new Random(SEED * 1_000_003L + shard);
@@ -726,7 +768,16 @@ public class WorkloadDriver {
                 if (sleepTime > 0) {
                     Thread.sleep(sleepTime);
                 } else if (-sleepTime >= TICK_MS) {
-                    // Stalled a full period or more: drop the missed ticks.
+                    // Stalled a full period or more: drop the missed ticks, and
+                    // record what they would have carried. Dropping is right -
+                    // injecting late would burst-load a system already
+                    // struggling - but it has to be counted, or the offered rate
+                    // in the results is not the offered rate in the config.
+                    long missed = (-sleepTime / TICK_MS) * (long) share;
+                    skippedBudget.add(missed);
+                    if (phase == PHASES.get(0)) {
+                        skippedWarmUp.add(missed);
+                    }
                     nextTickMs = System.currentTimeMillis();
                 }
             } catch (InterruptedException e) {

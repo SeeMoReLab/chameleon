@@ -48,4 +48,47 @@ class ReplicationPipelineTest {
             ServerImpl.applyReplicationSettingsForTest(4000, 4);
         }
     }
+
+    /**
+     * The pipeline is self-clocked: a follower acknowledgement pumps the next
+     * batch at once, so without a linger the batch carries only the entries
+     * that arrived during one round trip. On a fast link that is almost
+     * nothing, and the leader spends its budget on per-message overhead
+     * instead of entries - the reason the local topology batched far worse
+     * than the global one for identical work. The linger puts a floor under
+     * batch size, so the same writes cost materially fewer messages.
+     */
+    @Test
+    void aLingerBatchesTheSameWritesIntoFewerMessages() throws Exception {
+        long withoutLinger = replicationMessagesFor(0.0, 19820);
+        long withLinger = replicationMessagesFor(5.0, 19840);
+        assertTrue(withLinger * 2 <= withoutLinger,
+                "a 5 ms linger should at least halve the replication messages for the same writes, but sent "
+                        + withLinger + " against " + withoutLinger);
+    }
+
+    /**
+     * Messages the leader sent to replicate the same paced writes, at one linger
+     * setting. The pacing is the point: a burst all lands in the log before the
+     * first pump and leaves in one batch whatever the linger, which is not the
+     * regime that goes wrong. Entries have to arrive at a rate comparable to
+     * the round trip for the self-clocking to show, exactly as offered load
+     * does in a run.
+     */
+    private static long replicationMessagesFor(double lingerMs, int basePort) throws Exception {
+        ServerImpl.applyReplicationSettingsForTest(4000, 16, lingerMs);
+        try (TestCluster cluster = new TestCluster(basePort)) {
+            ServerImpl leader = cluster.awaitLeader(15_000);
+            long before = leader.replicationMessagesSent();
+            int lastIndex = -1;
+            for (int i = 0; i < 400; i++) {
+                lastIndex = leader.appendWrite("linger-" + (i % 50), "v" + i, "linger-op-" + i);
+                Thread.sleep(1);
+            }
+            leader.awaitCommitIndex(lastIndex).get(30, TimeUnit.SECONDS);
+            return leader.replicationMessagesSent() - before;
+        } finally {
+            ServerImpl.applyReplicationSettingsForTest(4000, 4);
+        }
+    }
 }

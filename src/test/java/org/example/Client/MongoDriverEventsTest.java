@@ -15,6 +15,7 @@ import com.mongodb.connection.ServerId;
 import com.mongodb.event.ConnectionCheckOutFailedEvent;
 import com.mongodb.event.ConnectionCheckedOutEvent;
 import com.mongodb.event.ConnectionClosedEvent;
+import com.mongodb.event.ConnectionCheckOutStartedEvent;
 import com.mongodb.event.ConnectionCreatedEvent;
 
 /**
@@ -32,7 +33,9 @@ class MongoDriverEventsTest {
         return new ConnectionId(SERVER_ID);
     }
 
+    /** One complete checkout, started then satisfied, as the driver emits them. */
     private static void checkedOut(MongoDriverEvents events, long waitedMs) {
+        events.connectionCheckOutStarted(new ConnectionCheckOutStartedEvent(SERVER_ID, 1L));
         events.connectionCheckedOut(new ConnectionCheckedOutEvent(connectionId(), 1L,
                 TimeUnit.MILLISECONDS.toNanos(waitedMs)));
     }
@@ -84,20 +87,46 @@ class MongoDriverEventsTest {
     }
 
     @Test
-    void refusalNeedsBothAFullPoolAndAQueueLongerThanTheDeadline() {
+    void refusalNeedsAFullPoolALiveQueueAndAWaitBeyondTheDeadline() {
         MongoDriverEvents events = new MongoDriverEvents("virginia");
         for (int i = 0; i < 500; i++) {
             checkedOut(events, 400);
         }
+        // Every checkout above was matched by its start below, so the queue is empty.
+        assertEquals(0, events.queueDepth(ADDRESS));
         assertFalse(MongoTransport.refuseForQueue(events, ADDRESS, 4, 40),
                 "a growing pool is never refused: waiting for it to open a connection is productive");
 
         for (int i = 0; i < 4; i++) {
             events.connectionCreated(new ConnectionCreatedEvent(connectionId()));
         }
+        assertFalse(MongoTransport.refuseForQueue(events, ADDRESS, 4, 40),
+                "a full pool with nobody queued on it has no queue to be behind");
+
+        events.connectionCheckOutStarted(new ConnectionCheckOutStartedEvent(SERVER_ID, 1L));
+        assertEquals(1, events.queueDepth(ADDRESS));
         assertTrue(MongoTransport.refuseForQueue(events, ADDRESS, 4, 40),
                 "400 ms of queue cannot serve 40 ms of deadline");
         assertFalse(MongoTransport.refuseForQueue(events, ADDRESS, 4, 800),
                 "a patient request may still queue");
+    }
+
+    @Test
+    void aRefusedPoolCannotLatch() {
+        // The failure this guards against: refuse everything, so no checkout happens,
+        // so the smoothed wait stays stale and high and keeps refusing forever.
+        MongoDriverEvents events = new MongoDriverEvents("virginia");
+        for (int i = 0; i < 4; i++) {
+            events.connectionCreated(new ConnectionCreatedEvent(connectionId()));
+        }
+        for (int i = 0; i < 500; i++) {
+            events.connectionCheckOutStarted(new ConnectionCheckOutStartedEvent(SERVER_ID, 1L));
+            events.connectionCheckOutFailed(new ConnectionCheckOutFailedEvent(SERVER_ID, 1L,
+                    ConnectionCheckOutFailedEvent.Reason.TIMEOUT, TimeUnit.MILLISECONDS.toNanos(1000)));
+        }
+        assertEquals(1000.0, events.checkoutWaitMs(ADDRESS), 5.0, "the mean is stale and high");
+        assertEquals(0, events.queueDepth(ADDRESS), "but nothing is queued any more");
+        assertFalse(MongoTransport.refuseForQueue(events, ADDRESS, 4, 40),
+                "so the next request is admitted and gets to measure the pool again");
     }
 }

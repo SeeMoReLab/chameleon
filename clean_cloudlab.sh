@@ -9,7 +9,8 @@
 #   - the tmux session 'tuneable' (the orchestrator refuses to start while it exists)
 #   - the server processes (ServerNode JVMs or patched mongods), the
 #     WorkloadDriver, MongoClusterAdmin, and the remote runner shell
-#   - the tc/netem delay rules on loopback (geo.enabled runs)
+#   - the tc/netem delay rules (geo.enabled runs), and on a distributed run
+#     also the client's per-site address aliases and the servers' routes to them
 #   - mongo_data/ directories under ~/tuneable/runs/*/ (gigabytes, never results)
 # It reports, but by default keeps, run directories without run_info.txt
 # (partial CSVs and logs of the interrupted run); --purge-incomplete deletes them.
@@ -21,36 +22,69 @@
 # `tail -F run.log` started by run_all_cloudlab.sh survives its Ctrl-C).
 #
 # Usage: ./clean_cloudlab.sh <user@host> <ssh-key-path> [--dry-run] [--purge-incomplete]
+#    or: ./clean_cloudlab.sh --hosts <hosts.txt> --key <key> [--dry-run] [--purge-incomplete]
 #   --dry-run           report what would be removed and exit without changing anything
 #   --purge-incomplete  also delete run directories that have no run_info.txt
+#   --site-subnet       the client site aliases a distributed run adds, so they can be
+#                       found and removed (default 10.99.0.0/24; match run_all_cloudlab.sh)
 #
 set -euo pipefail
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+# shellcheck source=cloudlab_hosts.sh
+source "$REPO_DIR/cloudlab_hosts.sh"
 
 DRY_RUN=0
 PURGE_INCOMPLETE=0
+HOSTS_FILE=""
+KEY=""
+SITE_SUBNET="10.99.0.0/24"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --purge-incomplete) PURGE_INCOMPLETE=1; shift ;;
+        --hosts) [[ $# -ge 2 ]] || die "--hosts requires a hosts file"; HOSTS_FILE="$2"; shift 2 ;;
+        --hosts=*) HOSTS_FILE="${1#--hosts=}"; shift ;;
+        --key) [[ $# -ge 2 ]] || die "--key requires an ssh key path"; KEY="$2"; shift 2 ;;
+        --key=*) KEY="${1#--key=}"; shift ;;
+        --site-subnet) [[ $# -ge 2 ]] || die "--site-subnet requires a.b.c.0/24"; SITE_SUBNET="$2"; shift 2 ;;
+        --site-subnet=*) SITE_SUBNET="${1#--site-subnet=}"; shift ;;
         --*) die "unknown flag: $1" ;;
         *) POSITIONAL+=("$1"); shift ;;
     esac
 done
-HOST="${POSITIONAL[0]:-}"
-KEY="${POSITIONAL[1]:-}"
-[[ -n "$HOST" && -n "$KEY" ]] || die "usage: ./clean_cloudlab.sh <user@host> <ssh-key-path> [--dry-run] [--purge-incomplete]"
+
+# TARGETS / TARGET_LAN run in lockstep; an empty LAN entry means "single host,
+# the geo rules are on loopback and there are no aliases or routes to undo".
+if [[ -n "$HOSTS_FILE" ]]; then
+    [[ ${#POSITIONAL[@]} -eq 0 ]] || die "unexpected arguments with --hosts: ${POSITIONAL[*]}"
+    [[ -n "$KEY" ]] || die "--hosts needs --key <ssh-key-path>"
+    hosts_load "$HOSTS_FILE"
+    TARGETS=("${ALL_SSH[@]}")
+    TARGET_LAN=("${ALL_LAN[@]}")
+    TAIL_HOST="$CLIENT_SSH"
+else
+    HOST="${POSITIONAL[0]:-}"
+    KEY="${KEY:-${POSITIONAL[1]:-}}"
+    [[ -n "$HOST" && -n "$KEY" ]] || die "usage: ./clean_cloudlab.sh <user@host> <ssh-key-path> [--dry-run] [--purge-incomplete]
+   or: ./clean_cloudlab.sh --hosts <hosts.txt> --key <key> [--dry-run] [--purge-incomplete]"
+    [[ ${#POSITIONAL[@]} -le 2 ]] || die "unexpected arguments: ${POSITIONAL[*]:2}"
+    TARGETS=("$HOST")
+    TARGET_LAN=("")
+    TAIL_HOST="$HOST"
+fi
 [[ -f "$KEY" ]] || die "ssh key not found: $KEY"
-[[ ${#POSITIONAL[@]} -le 2 ]] || die "unexpected arguments: ${POSITIONAL[*]:2}"
 
 SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
 
 # --- Local leftovers: the orchestrator's log stream for this host ---
 # run_all_cloudlab.sh backgrounds `ssh ... tail -F <run>/run.log`; its Ctrl-C
 # handler exits without killing it. Match on the host and the tail command.
-LOCAL_TAILS="$(pgrep -f "ssh .*${HOST}.*tail -F .*tuneable/runs/.*/run.log" || true)"
+LOCAL_TAILS="$(pgrep -f "ssh .*${TAIL_HOST}.*tail -F .*tuneable/runs/.*/run.log" || true)"
 if [[ -n "$LOCAL_TAILS" ]]; then
     echo "local: leftover log-stream ssh process(es): $(echo "$LOCAL_TAILS" | tr '\n' ' ')"
     if [[ "$DRY_RUN" == 0 ]]; then
@@ -64,12 +98,26 @@ fi
 # --- Remote cleanup ---
 # The script travels on stdin (`bash -s`), so no remote command line contains
 # the process patterns below and pgrep never matches the cleanup itself.
-echo "remote: connecting to $HOST"
-ssh "${SSH_OPTS[@]}" "$HOST" "bash -s -- $DRY_RUN $PURGE_INCOMPLETE" <<'REMOTE'
+CLEAN_FAIL=0
+for t in "${!TARGETS[@]}"; do
+echo
+echo "remote: connecting to ${TARGETS[$t]}"
+ssh "${SSH_OPTS[@]}" "${TARGETS[$t]}" "bash -s -- $DRY_RUN $PURGE_INCOMPLETE '${TARGET_LAN[$t]}' '$SITE_SUBNET'" <<'REMOTE' || CLEAN_FAIL=1
 set -euo pipefail
 DRY_RUN="$1"
 PURGE_INCOMPLETE="$2"
+LAN="$3"
+SITE_SUBNET="$4"
 SESSION="tuneable"
+# Which interfaces a run may have installed delay rules on: loopback for a
+# single-host run, and the experiment interface for a distributed one. The
+# machine's control interface is never touched.
+NET_IFACES=(lo)
+if [[ -n "$LAN" ]]; then
+    EXP_IFACE="$(ip -o -4 addr show | awk -v a="$LAN" '$4 ~ "^"a"/" {print $2; exit}')"
+    [[ -n "$EXP_IFACE" ]] || { echo "remote: WARNING: no interface carries $LAN; skipping its network cleanup" >&2; }
+    [[ -n "$EXP_IFACE" ]] && NET_IFACES+=("$EXP_IFACE")
+fi
 RUNS_DIR="$HOME/tuneable/runs"
 # Exactly the processes the remote runner starts (cloudlab_remote_run.sh) plus
 # the runner itself and the orchestrator's remote tail. The mongod pattern
@@ -100,9 +148,26 @@ list_pids() {
     done
     return 0
 }
-has_delay_rules() {
-    # An untouched loopback shows "qdisc noqueue 0: root"; geo_apply.sh installs an htb root.
-    tc qdisc show dev lo | grep -q 'htb'
+delay_ifaces() {
+    # An untouched interface shows "qdisc noqueue 0: root" or the default
+    # pfifo_fast/mq; net_apply.sh installs an htb root.
+    local d
+    for d in "${NET_IFACES[@]}"; do
+        tc qdisc show dev "$d" 2>/dev/null | grep -q 'htb' && echo "$d"
+    done
+    return 0
+}
+site_aliases() {
+    # The per-site source addresses the client machine carries during a
+    # distributed run, found by subnet rather than by count.
+    [[ -n "$LAN" && -n "${EXP_IFACE:-}" ]] || return 0
+    ip -o -4 addr show dev "$EXP_IFACE" | awk -v net="${SITE_SUBNET%.0/24}." '$4 ~ "^"net {print $4}'
+    return 0
+}
+site_routes() {
+    [[ -n "$LAN" ]] || return 0
+    ip -4 route show "$SITE_SUBNET" 2>/dev/null
+    return 0
 }
 incomplete_runs() {
     local d
@@ -137,12 +202,25 @@ if [[ -n "$PIDS" ]]; then
 else
     echo "remote: no run processes"
 fi
-if has_delay_rules; then
-    echo "remote: tc delay rules on lo: $(tc qdisc show dev lo | grep -c netem) netem qdiscs"
-    DELAYS=1
+DELAY_IFACES="$(delay_ifaces)"
+if [[ -n "$DELAY_IFACES" ]]; then
+    for d in $DELAY_IFACES; do
+        echo "remote: tc delay rules on $d: $(tc qdisc show dev "$d" | grep -c netem) netem qdiscs"
+    done
 else
-    echo "remote: no tc delay rules on lo"
-    DELAYS=0
+    echo "remote: no tc delay rules on ${NET_IFACES[*]}"
+fi
+ALIASES="$(site_aliases)"
+if [[ -n "$ALIASES" ]]; then
+    echo "remote: client site aliases on ${EXP_IFACE:-}: $(echo $ALIASES)"
+else
+    echo "remote: no client site aliases"
+fi
+ROUTES="$(site_routes)"
+if [[ -n "$ROUTES" ]]; then
+    echo "remote: routes to $SITE_SUBNET: $(echo $ROUTES)"
+else
+    echo "remote: no routes to $SITE_SUBNET"
 fi
 MONGO_DATA="$(mongo_data_dirs)"
 if [[ -n "$MONGO_DATA" ]]; then
@@ -185,9 +263,17 @@ if [[ -n "$PIDS" ]]; then
 fi
 
 # --- Network ---
-if [[ "$DELAYS" == 1 ]]; then
-    sudo tc qdisc del dev lo root
-    echo "remote: cleared tc delay rules on lo"
+for d in $DELAY_IFACES; do
+    sudo tc qdisc del dev "$d" root
+    echo "remote: cleared tc delay rules on $d"
+done
+for a in $ALIASES; do
+    sudo ip addr del "$a" dev "$EXP_IFACE"
+    echo "remote: removed client site alias $a"
+done
+if [[ -n "$ROUTES" ]]; then
+    sudo ip route del "$SITE_SUBNET" 2>/dev/null || true
+    echo "remote: removed the route to $SITE_SUBNET"
 fi
 
 # --- Disk ---
@@ -209,8 +295,13 @@ FAIL=0
 tmux has-session -t "=$SESSION" 2>/dev/null && { echo "remote: VERIFY FAILED: tmux session '$SESSION' still exists" >&2; FAIL=1; }
 LEFT="$(list_pids)"
 [[ -z "$LEFT" ]] || { echo "remote: VERIFY FAILED: processes still alive: $(echo $LEFT)" >&2; FAIL=1; }
-has_delay_rules && { echo "remote: VERIFY FAILED: tc delay rules still present on lo" >&2; FAIL=1; }
+[[ -z "$(delay_ifaces)" ]] || { echo "remote: VERIFY FAILED: tc delay rules still present on $(delay_ifaces)" >&2; FAIL=1; }
+[[ -z "$(site_aliases)" ]] || { echo "remote: VERIFY FAILED: client site aliases remain" >&2; FAIL=1; }
+[[ -z "$(site_routes)" ]] || { echo "remote: VERIFY FAILED: routes to $SITE_SUBNET remain" >&2; FAIL=1; }
 [[ -z "$(mongo_data_dirs)" ]] || { echo "remote: VERIFY FAILED: mongo_data directories remain" >&2; FAIL=1; }
 [[ "$FAIL" == 0 ]] || exit 1
 echo "remote: clean; ready for the next run_all_cloudlab.sh"
 REMOTE
+done
+
+[[ "$CLEAN_FAIL" == 0 ]] || die "cleanup did not verify on every machine (see above)"

@@ -27,7 +27,7 @@ class MultiSiteTransportTest {
 
     @BeforeAll
     static void economicsDefaults() {
-        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001);
+        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001, 1.0e6);
     }
 
     private static KvResponse call(KvFramedTransport transport, int siteId, int nodeId,

@@ -24,7 +24,7 @@ class EconomicsIntegrationTest {
 
     @Test
     void lightLoadRejectsNothingAndLambdaStaysAtTheFloor() throws Exception {
-        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001);
+        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001, 1.0e6);
         SlaRegistry.registerReadSla(30, 1, List.of(read(ReadLevel.EVENTUAL_LOCAL, 1000, 2)));
         SlaRegistry.registerWriteSla(30, 1, List.of(new RungScorer.Rung(1, 1000, 2)));
 
@@ -57,7 +57,7 @@ class EconomicsIntegrationTest {
         // light-load test; what this test pins is that scoring and admission
         // shed strictly in value order as lambda rises. A near-zero eta makes
         // the background controller hold the forced price.
-        MeasurementPlane.applyEconomics(1000, 50, 0.85, 1e-9, 0.0001);
+        MeasurementPlane.applyEconomics(1000, 50, 0.85, 1e-9, 0.0001, 1.0e6);
         try {
             // Same rung shape, five orders of magnitude apart in profit.
             SlaRegistry.registerReadSla(31, 1, List.of(read(ReadLevel.EVENTUAL_LOCAL, 1000, 0.001)));
@@ -129,7 +129,7 @@ class EconomicsIntegrationTest {
                 }
             }
         } finally {
-            MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001);
+            MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001, 1.0e6);
         }
     }
 }

@@ -31,6 +31,7 @@ public final class MeasurementPlane implements AutoCloseable {
     private static volatile double U_TARGET = 0.85;
     private static volatile double ETA = 1.0;
     private static volatile double LAMBDA_MIN = 0.0001;
+    private static volatile double LAMBDA_MAX = 1.0e6;
     // From config (server.histogramDecay): service-time histogram decay per
     // refresh tick; effective memory ~ HISTOGRAM_REFRESH_MS / (1 - decay).
     private static volatile double HISTOGRAM_DECAY = 0.95;
@@ -44,18 +45,20 @@ public final class MeasurementPlane implements AutoCloseable {
 
     public static void applyConfig(org.example.Utility.ExperimentConfig config) {
         applyEconomics(config.server.sMax, config.chameleon.controlIntervalMs,
-                config.chameleon.uTarget, config.chameleon.eta, config.chameleon.lambdaMin);
+                config.chameleon.uTarget, config.chameleon.eta, config.chameleon.lambdaMin,
+                config.chameleon.lambdaMax);
         HISTOGRAM_DECAY = config.server.histogramDecay;
     }
 
     /** Direct knob access for tests (overload shedding needs artificial pressure). */
     public static void applyEconomics(double sMax, int controlIntervalMs, double uTarget, double eta,
-            double lambdaMin) {
+            double lambdaMin, double lambdaMax) {
         S_MAX = sMax;
         CONTROL_INTERVAL_MS = controlIntervalMs;
         U_TARGET = uTarget;
         ETA = eta;
         LAMBDA_MIN = lambdaMin;
+        LAMBDA_MAX = lambdaMax;
     }
 
     public static double sMax() {
@@ -79,7 +82,7 @@ public final class MeasurementPlane implements AutoCloseable {
     private volatile double lastUtilization;
     private volatile double lastCrossCheckUtilization;
 
-    private final PriceController priceController = new PriceController(U_TARGET, ETA, LAMBDA_MIN);
+    private final PriceController priceController = new PriceController(U_TARGET, ETA, LAMBDA_MIN, LAMBDA_MAX);
     private final java.util.concurrent.atomic.AtomicInteger[][] uncalibratedRiders;
 
     private final ScheduledExecutorService scheduler;

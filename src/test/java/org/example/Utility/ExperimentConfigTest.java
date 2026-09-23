@@ -20,7 +20,7 @@ class ExperimentConfigTest {
     // Surefire's working directory is the build directory, a direct child of
     // the repo root, so the repo config is one level up.
     private static final Path REPO_CONFIG = Path.of("..", "config_local.yaml");
-    private static final Path MONGODB_CONFIG = Path.of("..", "config_mongodb_global.yaml");
+    private static final Path MONGODB_CONFIG = Path.of("..", "config_global_mongodb.yaml");
 
     @Test
     void repoConfigLoadsAndValidates() {
@@ -70,13 +70,20 @@ class ExperimentConfigTest {
 
     @Test
     void phasesMustReferenceDefinedMixes() throws IOException {
-        // workload.phases is the last section of the repo config, so an
-        // appended list item (at its indentation) extends it with one more phase.
-        String yaml = Files.readString(REPO_CONFIG)
+        // Insert the extra phase immediately after "  phases:" rather than at the
+        // end of the file. Appending relied on workload.phases being the last
+        // section, which it no longer is - and that same assumption, in a config
+        // generator, once silently dropped a trailing transport declaration.
+        String repo = Files.readString(REPO_CONFIG);
+        int at = repo.indexOf("\n  phases:\n");
+        assertTrue(at >= 0, "repo config has no '  phases:' block");
+        at += "\n  phases:\n".length();
+        String yaml = repo.substring(0, at)
                 + "    - name: Bad\n"
                 + "      durationSeconds: 10\n"
                 + "      totalTPS: 100\n"
-                + "      mix: doesNotExist\n";
+                + "      mix: doesNotExist\n"
+                + repo.substring(at);
         Path tmp = Files.createTempFile("config-test", ".yaml");
         try {
             Files.writeString(tmp, yaml);
@@ -183,9 +190,143 @@ class ExperimentConfigTest {
         assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.clientSiteBindHost(254));
     }
 
+    /**
+     * A distributed run (run_all_cloudlab.sh --hosts) writes
+     * geo.clientSiteBindHosts into the config, because the sites then live on
+     * a machine the servers reach over the network and loopback addresses
+     * would not be routable.
+     */
+    @Test
+    void clientSiteBindHostsOverrideTheConventionWhenTheConfigNamesThem() throws IOException {
+        int sites = ExperimentConfig.load(REPO_CONFIG).geo.clientSites.size();
+        StringBuilder list = new StringBuilder();
+        for (int s = 0; s < sites; s++) {
+            list.append(s > 0 ? ", " : "").append("10.99.0.").append(s + 1);
+        }
+        ExperimentConfig config = loadWithBindHosts(list.toString());
+        assertEquals("10.99.0.1", config.siteBindHost(0));
+        assertEquals("10.99.0." + sites, config.siteBindHost(sites - 1));
+        // Absent, the single-host loopback convention still applies.
+        assertEquals("127.0.2.1", ExperimentConfig.load(REPO_CONFIG).siteBindHost(0));
+    }
+
+    @Test
+    void clientSiteBindHostsAreRejectedWhenTheyCannotIdentifySites() {
+        // One per site, or the delay rules and the sites disagree about which is which.
+        assertTrue(assertThrows(IllegalArgumentException.class,
+                () -> loadWithBindHosts("10.99.0.1, 10.99.0.2")).getMessage()
+                .contains("one entry per client site"));
+        // Two sites sharing a source address are indistinguishable to netem.
+        assertTrue(assertThrows(IllegalArgumentException.class,
+                () -> loadWithBindHosts("10.99.0.1, 10.99.0.1, 10.99.0.3, 10.99.0.4, 10.99.0.5")).getMessage()
+                .contains("duplicated"));
+        // A hostname would resolve differently on each machine.
+        assertTrue(assertThrows(IllegalArgumentException.class,
+                () -> loadWithBindHosts("siteA, siteB, siteC, siteD, siteE")).getMessage()
+                .contains("literal IPv4 address"));
+    }
+
+    /** The repo config with a geo.clientSiteBindHosts line spliced in, the way the runner writes it. */
+    private static ExperimentConfig loadWithBindHosts(String list) throws IOException {
+        String yaml = Files.readString(REPO_CONFIG)
+                .replaceFirst("(?m)^geo:$", "geo:\n  clientSiteBindHosts: [" + list + "]");
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, yaml);
+            return ExperimentConfig.load(tmp);
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    /**
+     * The linger is what stops the replication pipeline from being clocked by
+     * follower acknowledgements, so a bad value has to fail loudly rather than
+     * silently restore the self-clocked behaviour.
+     */
+    @Test
+    void ingressHardCapIsRequiredAndIndependentOfSMax() throws IOException {
+        ExperimentConfig config = ExperimentConfig.load(REPO_CONFIG);
+        // Three times sMax. The ratio bounds the largest utilization the price
+        // controller can observe, since in-flight cannot exceed the cap, so it
+        // decides whether the controller can reach uTarget at all: at 18.75x
+        // it saturated at lambdaMax under overload, and at 1.5x the cap did all
+        // the admission while the price sat on its floor.
+        assertEquals(9600, config.server.ingressHardCapInFlight);
+        assertEquals(3200, config.server.sMax);
+        assertEquals(3 * config.server.sMax, config.server.ingressHardCapInFlight, 1e-9);
+        String stripped = Files.readString(REPO_CONFIG)
+                .replaceAll("(?m)^  ingressHardCapInFlight: .*\n", "");
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, stripped);
+            assertTrue(assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.load(tmp))
+                    .getMessage().contains("server.ingressHardCapInFlight"));
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    /**
+     * Which store a run drove must be stated, never inferred: a generated config
+     * that dropped this line once produced a full mongod calibration ladder run
+     * against the Java store, with every other key valid and the numbers
+     * plausible enough to analyse.
+     */
+    @Test
+    void transportIsRequiredAndNotDefaulted() throws IOException {
+        assertEquals("framed", ExperimentConfig.load(REPO_CONFIG).transport);
+        String stripped = Files.readString(REPO_CONFIG)
+                .replaceAll("(?m)^transport: .*\n", "");
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, stripped);
+            assertTrue(assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.load(tmp))
+                    .getMessage().contains("transport is required"));
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    @Test
+    void replicationLingerIsRequiredAndBounded() throws IOException {
+        assertEquals(5.0, ExperimentConfig.load(REPO_CONFIG).server.replicationLingerMs, 1e-9);
+        // 0 is legal and means "no linger" - the pre-fix behaviour, kept for A/B runs.
+        assertEquals(0.0, loadWithLinger("0").server.replicationLingerMs, 1e-9);
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> loadWithLinger("-1"))
+                .getMessage().contains("non-negative"));
+        // Past the heartbeat there is no batching left to win and every majority
+        // write pays the wait.
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> loadWithLinger("25"))
+                .getMessage().contains("must not exceed 20 ms"));
+        // A missing key must not fall back to a default.
+        String stripped = Files.readString(REPO_CONFIG)
+                .replaceAll("(?m)^  replicationLingerMs: .*\n", "");
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, stripped);
+            assertTrue(assertThrows(IllegalArgumentException.class, () -> ExperimentConfig.load(tmp))
+                    .getMessage().contains("server.replicationLingerMs"));
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    private static ExperimentConfig loadWithLinger(String value) throws IOException {
+        String yaml = Files.readString(REPO_CONFIG)
+                .replaceAll("(?m)^  replicationLingerMs: .*$", "  replicationLingerMs: " + value);
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, yaml);
+            return ExperimentConfig.load(tmp);
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
     @Test
     void mongodbServerHooksDefaultOnAndOffOnlyForClientDecidedModes() throws IOException {
-        assertTrue(Files.exists(MONGODB_CONFIG), "repo config_mongodb_global.yaml must exist");
+        assertTrue(Files.exists(MONGODB_CONFIG), "repo config_global_mongodb.yaml must exist");
         String base = Files.readString(MONGODB_CONFIG);
         ExperimentConfig config = ExperimentConfig.load(MONGODB_CONFIG);
         assertTrue(config.mongodbServerHooks(), "the switch defaults to on");

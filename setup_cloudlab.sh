@@ -5,16 +5,30 @@
 # re-run it after CloudLab reimages the node.
 #
 # Usage: ./setup_cloudlab.sh <user@host> <ssh-key-path> [--mongodb]
+#    or: ./setup_cloudlab.sh --hosts <hosts.txt> --key <ssh-key-path> [--mongodb]
+#
+# The second form provisions every machine in a distributed allocation (see
+# cloudlab_hosts.sh for the file format).
 #
 # --mongodb additionally provisions everything the MongoDB transport needs
-# once per machine (MONGODB_PORT.md): the build dependencies, a checkout of
-# mongodb/mongo at the pinned commit under ~/mongo (only that commit's tree,
-# not the history), and bazel. The patched mongod itself is built by
-# build_cloudlab.sh (once per code change) and started by the run script.
+# (MONGODB_PORT.md): the build dependencies, a checkout of mongodb/mongo at
+# the pinned commit under ~/mongo (only that commit's tree, not the history),
+# and bazel. The patched mongod itself is built by build_cloudlab.sh (once per
+# code change) and started by the run script.
+#
+# That build environment costs about 60 GB and an hour, and only one machine
+# needs it: build_cloudlab.sh builds there once and copies the binary to the
+# other server machines through the CloudLab project directory. So in --hosts
+# mode it is provisioned on the first server machine alone.
 #
 set -euo pipefail
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+# shellcheck source=cloudlab_hosts.sh
+source "$REPO_DIR/cloudlab_hosts.sh"
 
 # The upstream commit the chameleon patch is written against (branch chameleon
 # in the local mongo/ clone). build_mongod.sh refuses a bundle whose base
@@ -23,37 +37,65 @@ PINNED_MONGO_COMMIT="6d990baca59ce7cdddded93409e0266d1ac6a45a"
 
 HOST=""
 KEY=""
+HOSTS_FILE=""
 WITH_MONGODB=0
-for arg in "$@"; do
-    case "$arg" in
-        --mongodb) WITH_MONGODB=1 ;;
-        --*) die "unknown flag: $arg" ;;
-        *) if [[ -z "$HOST" ]]; then HOST="$arg"; elif [[ -z "$KEY" ]]; then KEY="$arg"; else die "unexpected argument: $arg"; fi ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mongodb) WITH_MONGODB=1; shift ;;
+        --hosts) [[ $# -ge 2 ]] || die "--hosts requires a hosts file"; HOSTS_FILE="$2"; shift 2 ;;
+        --hosts=*) HOSTS_FILE="${1#--hosts=}"; shift ;;
+        --key) [[ $# -ge 2 ]] || die "--key requires an ssh key path"; KEY="$2"; shift 2 ;;
+        --key=*) KEY="${1#--key=}"; shift ;;
+        --*) die "unknown flag: $1" ;;
+        *) if [[ -z "$HOST" ]]; then HOST="$1"; elif [[ -z "$KEY" ]]; then KEY="$1"; else die "unexpected argument: $1"; fi; shift ;;
     esac
 done
-[[ -n "$HOST" && -n "$KEY" ]] || die "usage: ./setup_cloudlab.sh <user@host> <ssh-key-path> [--mongodb]"
-[[ -f "$KEY" ]] || die "ssh key not found: $KEY"
+[[ -f "$KEY" ]] || die "ssh key not found: ${KEY:-<none given>}"
+
+# TARGETS: every machine to provision. BUILDER: the one that also gets the
+# MongoDB build environment (node 0 in a distributed allocation).
+if [[ -n "$HOSTS_FILE" ]]; then
+    [[ -z "$HOST" ]] || die "pass either a positional host or --hosts, not both"
+    hosts_load "$HOSTS_FILE"
+    TARGETS=("${ALL_SSH[@]}")
+    BUILDER="${SERVER_SSH[0]}"
+    echo "Provisioning ${#TARGETS[@]} machine(s) from $HOSTS_FILE:"
+    hosts_describe
+    echo
+else
+    [[ -n "$HOST" ]] || die "usage: ./setup_cloudlab.sh <user@host> <ssh-key-path> [--mongodb]
+   or: ./setup_cloudlab.sh --hosts <hosts.txt> --key <ssh-key-path> [--mongodb]"
+    TARGETS=("$HOST")
+    BUILDER="$HOST"
+fi
 
 SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30)
 
-echo "Provisioning $HOST..."
-ssh "${SSH_OPTS[@]}" "$HOST" bash -s <<'REMOTE'
+for TARGET in "${TARGETS[@]}"; do
+echo "Provisioning $TARGET..."
+ssh "${SSH_OPTS[@]}" "$TARGET" bash -s <<'REMOTE'
 set -euo pipefail
 sudo apt-get update -q
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
     openjdk-17-jdk-headless tmux iproute2
 mkdir -p "$HOME/tuneable/runs"
+# A node that has just booted can be hundreds of ms off NTP time, and chrony
+# slews that back over hours. The servers compare client clock stamps against
+# their own clock, so step it now; run_all_cloudlab.sh refuses to start on a
+# machine that is still off.
+sudo chronyc makestep >/dev/null
 echo
 echo "Installed:"
 java -version 2>&1 | head -1
 tmux -V
 tc -V | head -1
 REMOTE
+done
 
 if [[ "$WITH_MONGODB" == 1 ]]; then
     echo
-    echo "Provisioning the MongoDB build environment on $HOST (pinned commit ${PINNED_MONGO_COMMIT:0:12})..."
-    ssh "${SSH_OPTS[@]}" "$HOST" PINNED_MONGO_COMMIT="$PINNED_MONGO_COMMIT" bash -s <<'REMOTE'
+    echo "Provisioning the MongoDB build environment on $BUILDER (pinned commit ${PINNED_MONGO_COMMIT:0:12})..."
+    ssh "${SSH_OPTS[@]}" "$BUILDER" PINNED_MONGO_COMMIT="$PINNED_MONGO_COMMIT" bash -s <<'REMOTE'
 set -euo pipefail
 # The bazel build fetches MongoDB's own hermetic compiler toolchain, so only
 # the headers it links against and python are needed on the host. gcc compiles
@@ -121,8 +163,17 @@ REMOTE
 fi
 
 echo
-echo "Node ready."
-echo "  experiments:      ./run_all_cloudlab.sh $HOST $KEY [label] [config.yaml]"
-if [[ "$WITH_MONGODB" == 1 ]]; then
-    echo "  build mongod:     ./build_cloudlab.sh $HOST $KEY   (once per change to the patch)"
+if [[ -n "$HOSTS_FILE" ]]; then
+    echo "${#TARGETS[@]} machines ready."
+    echo "  experiments:      ./run_all_cloudlab.sh --hosts $HOSTS_FILE --key $KEY [label] [config.yaml]"
+    if [[ "$WITH_MONGODB" == 1 ]]; then
+        echo "  build mongod:     ./build_cloudlab.sh --hosts $HOSTS_FILE --key $KEY   (once per change to the patch;"
+        echo "                    builds on $BUILDER and copies to the other server machines)"
+    fi
+else
+    echo "Node ready."
+    echo "  experiments:      ./run_all_cloudlab.sh $HOST $KEY [label] [config.yaml]"
+    if [[ "$WITH_MONGODB" == 1 ]]; then
+        echo "  build mongod:     ./build_cloudlab.sh $HOST $KEY   (once per change to the patch)"
+    fi
 fi

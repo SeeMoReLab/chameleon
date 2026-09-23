@@ -44,6 +44,10 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
     // Global backstop on any server-side wait (from config).
     private static volatile long MAX_WAIT_MS = 400;
     private static volatile double REPLICATION_BUDGET_PER_SECOND = 20000;
+    // In-flight ceiling at the ingress event loop. Independent of sMax so that
+    // a probe can pin sMax out of reach to silence the price without also
+    // removing the only thing bounding the receive queue.
+    private static volatile int INGRESS_HARD_CAP_IN_FLIGHT = 30000;
     // Stage 6: followers may serve linearizable reads by fetching a confirmed
     // read index from the leader and waiting for their own commit index to
     // reach it. Off by default until measured.
@@ -56,6 +60,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
     public static void applyConfig(org.example.Utility.ExperimentConfig config) {
         MAX_WAIT_MS = config.server.maxWaitMs;
         REPLICATION_BUDGET_PER_SECOND = config.server.replicationBudgetPerSecond;
+        INGRESS_HARD_CAP_IN_FLIGHT = config.server.ingressHardCapInFlight;
         FOLLOWER_LINEARIZABLE_READS = config.server.followerLinearizableReads;
         CHAMELEON_DECISION = config.chameleonDecision();
     }
@@ -88,12 +93,12 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
     }
 
     private static int configuredAdmissionCapacity() {
-        double capacity = Math.ceil(1.5 * MeasurementPlane.sMax());
-        if (!Double.isFinite(capacity) || capacity < 1 || capacity > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("1.5 * sMax must be in [1, " + Integer.MAX_VALUE
-                    + "], got " + capacity);
+        int capacity = INGRESS_HARD_CAP_IN_FLIGHT;
+        if (capacity < 1) {
+            throw new IllegalArgumentException(
+                    "server.ingressHardCapInFlight must be at least 1, got " + capacity);
         }
-        return (int) capacity;
+        return capacity;
     }
 
     int admissionCapacity() {

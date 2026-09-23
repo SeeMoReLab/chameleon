@@ -141,8 +141,8 @@ public final class KvFramedTransport implements KvTransport {
                                     + " to server " + node + " at " + remoteAddress, e);
                         }
                         connection.channel = channel;
-                        connections[site][node][index] = connection;
                         allChannels.add(channel);
+                        connections[site][node][index] = connection;
                     }
                 }
             }

@@ -14,6 +14,7 @@ import com.mongodb.connection.ServerType;
 import com.mongodb.event.ClusterDescriptionChangedEvent;
 import com.mongodb.event.ClusterListener;
 import com.mongodb.event.ConnectionCheckOutFailedEvent;
+import com.mongodb.event.ConnectionCheckOutStartedEvent;
 import com.mongodb.event.ConnectionCheckedOutEvent;
 import com.mongodb.event.ConnectionClosedEvent;
 import com.mongodb.event.ConnectionCreatedEvent;
@@ -107,8 +108,9 @@ final class MongoDriverEvents implements ServerListener, ClusterListener, Connec
         checkoutFailed.computeIfAbsent(event.getReason().toString(), k -> new AtomicLong()).incrementAndGet();
         // A checkout that gave up waited at least this long; dropping it would bias the
         // estimate downwards exactly when the queue is at its worst.
-        pool(event.getServerId().getAddress().toString())
-                .sampleWait(event.getElapsedTime(TimeUnit.MILLISECONDS));
+        Pool p = pool(event.getServerId().getAddress().toString());
+        p.waiting.decrementAndGet();
+        p.sampleWait(event.getElapsedTime(TimeUnit.MILLISECONDS));
     }
 
     @Override
@@ -137,6 +139,8 @@ final class MongoDriverEvents implements ServerListener, ClusterListener, Connec
     private static final class Pool {
         final AtomicLong waitMsBits = new AtomicLong(Double.doubleToLongBits(0.0));
         final AtomicInteger size = new AtomicInteger();
+        /** Checkouts started and not yet satisfied or given up: the queue, right now. */
+        final AtomicInteger waiting = new AtomicInteger();
 
         void sampleWait(double ms) {
             waitMsBits.accumulateAndGet(Double.doubleToLongBits(ms), (prevBits, sampleBits) -> {
@@ -178,10 +182,30 @@ final class MongoDriverEvents implements ServerListener, ClusterListener, Connec
         return p != null && p.size.get() >= maxPoolSize;
     }
 
+    /**
+     * Checkouts currently queued on this pool. Read alongside checkoutWaitMs before
+     * refusing anything: the smoothed wait says how long a queue has been taking, and
+     * this says whether there is a queue at all. Without it the smoothed wait latches.
+     * A pool whose requests are all refused performs no checkouts, so it produces no
+     * fresh samples, so a stale high mean keeps refusing and nothing can ever
+     * contradict it. This count falls to zero the moment we stop queueing on the pool,
+     * which is what lets a pool recover.
+     */
+    int queueDepth(String address) {
+        Pool p = pools.get(address);
+        return p == null ? 0 : Math.max(0, p.waiting.get());
+    }
+
+    @Override
+    public void connectionCheckOutStarted(ConnectionCheckOutStartedEvent event) {
+        pool(event.getServerId().getAddress().toString()).waiting.incrementAndGet();
+    }
+
     @Override
     public void connectionCheckedOut(ConnectionCheckedOutEvent event) {
-        pool(event.getConnectionId().getServerId().getAddress().toString())
-                .sampleWait(event.getElapsedTime(TimeUnit.MILLISECONDS));
+        Pool p = pool(event.getConnectionId().getServerId().getAddress().toString());
+        p.waiting.decrementAndGet();
+        p.sampleWait(event.getElapsedTime(TimeUnit.MILLISECONDS));
     }
 
     @Override

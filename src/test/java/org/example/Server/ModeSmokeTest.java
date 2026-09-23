@@ -31,7 +31,7 @@ class ModeSmokeTest {
 
     @BeforeAll
     static void setUp() {
-        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001);
+        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001, 1.0e6);
         SlaRegistry.registerReadSla(70, 1, READ_SLA);
         SlaRegistry.registerWriteSla(70, 1, WRITE_SLA);
     }

@@ -270,4 +270,18 @@ class MongoTransportTest {
         };
         assertEquals(0.0, noQueue.queueWaitMs(3, 2));
     }
+
+    @Test
+    void aQueueRefusalIsItsOwnCauseAndAServerErrorIsNot() {
+        // The session client counts a TRANSPORT_QUEUE failure apart from violations and
+        // from admission rejections, so the two constructors must not be interchangeable.
+        KvTransport.RpcFailure server = new KvTransport.RpcFailure(
+                io.grpc.Status.UNAVAILABLE.withDescription("node down"), 0);
+        assertEquals(KvTransport.Cause.SERVER, server.cause(), "the default stays server-attributed");
+
+        KvTransport.RpcFailure queued = new KvTransport.RpcFailure(
+                io.grpc.Status.DEADLINE_EXCEEDED.withDescription("pool full"), 0,
+                KvTransport.Cause.TRANSPORT_QUEUE);
+        assertEquals(KvTransport.Cause.TRANSPORT_QUEUE, queued.cause());
+    }
 }

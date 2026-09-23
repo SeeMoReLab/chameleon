@@ -55,12 +55,79 @@ server:
   # level of the same view (reads) or acks with the replication reached so
   # far (writes). Client-sent wait bounds are clamped to this too.
   maxWaitMs: 500
-  # Occupancy slot budget: the time-weighted average number of requests in
-  # flight the node is calibrated for (sweep_smax.sh measures it at the
-  # latency knee). Utilization u = framed-admission-to-terminal slot-time /
-  # (sMax * interval). The ingress event loop accepts at most 1.5x sMax
-  # requests from fixed frame headers before protobuf parsing - in every mode.
-  sMax: 4500
+  # Most requests the ingress event loop holds before refusing new ones, and the
+  # capacity of the admission queue behind it. A pure backstop: it exists so a
+  # failure of the price cannot let the receive queue grow until frames arrive
+  # already dead, and it should never bind while the price is working.
+  #
+  # Three times sMax. The ratio cap/sMax is what bounds the largest utilization
+  # the price controller can ever observe, because in-flight cannot exceed the
+  # cap, so it decides whether the controller can reach uTarget at all. Measured
+  # on the local topology (sMax 3,200) at all three ratios, at 1C and at 2.5C:
+  #
+  #   1.5x (4,800)   1C: cap rejects 7.72%, price 0.00%, lambda on its floor -
+  #                  the cap does all the admission and the price is inert.
+  #   3x   (9,600)   1C: cap 1.04%, price 0.41%, lambda 3.0e-1. At 2.5C lambda
+  #                  peaks at 235 with u held at 0.78 - regulating, not
+  #                  saturated - and returns to the floor during Collapse.
+  #   18.75x (60,000) 1C: cap 0.00%, price 6.09%, but u reaches 18.75 so the
+  #                  controller can never reach target; at 2.5C it saturates at
+  #                  lambdaMax and rejects 72% at the scorer, serving 557k/s
+  #                  against 1,518k/s at 3x.
+  #
+  # The absolute 60,000 this replaced was chosen from the chameleon arm at 1C
+  # alone. It is much worse for the arms that have no price: strongest at 1C ran
+  # 92.5 ms with 17.2% violations and in-flight averaging 54,596, against 22.8 ms
+  # and 0.0% at 3x, because for those arms the cap IS the admission control.
+  # Comparing a regulated arm against baselines crippled that way would not be a
+  # fair experiment.
+  #
+  # A multiplier is safe here only because lambdaMax bounds the price: in-flight
+  # is still heavy-tailed (max/mean over 100 ms intervals reached 9.6x on local),
+  # so the cap does clip spikes, but the clipping is small at 3x and the
+  # controller absorbs the rest.
+  ingressHardCapInFlight: 21600
+  # Occupancy slot budget: the concurrency this node is allowed to carry.
+  # Utilization u = framed-admission-to-terminal slot-time / (sMax * interval),
+  # and uTarget holds the mean at 85% of the budget. The ingress event loop's
+  # own ceiling is ingressHardCapInFlight above, independent of this value.
+  #
+  # sMax is an operating point, not a capacity to be discovered. The old
+  # derivation - the primary's unregulated in-flight at C, measured with sMax
+  # pinned out of reach - no longer measures anything: with the price silenced
+  # in-flight has no equilibrium, so it runs to whatever the ingress cap allows
+  # and the cap sets the answer. It worked only while the harness collapsed at
+  # 350,000, well below capacity. It also produced a value ABOVE the machine's
+  # own reach on the global topology, where the price then sat at its floor and
+  # Chameleon was in effect switched off.
+  #
+  # Calibrated instead by sweeping sMax at the operating point (C = 1,000,000,
+  # linger 5 ms, chameleon arm) and reading realized profit, which is the only
+  # metric that prices both sides of the trade-off: a small budget refuses work
+  # the machine could do, a large one wins throughput but pushes responses down
+  # the SLA rungs. Goodput cannot choose - the deadlines are loose against
+  # these latencies, so queueing never registers as a violation and goodput
+  # rises monotonically with sMax. Utilization cannot choose either: u read 0.85
+  # at 14 of 15 sweep points, because the controller drives u to uTarget for any
+  # reachable sMax. u is a useful ceiling test (it falls below target when sMax
+  # exceeds what the machine can fill) and nothing more.
+  #
+  # The profit curve is flat near its optimum - about 3% across a 2-4x range of
+  # sMax - while run-to-run variance reaches 5-9%, so the argmax is not
+  # resolvable. The chosen values are therefore monotonic in inter-node delay,
+  # which the physics supports and which costs at most 2.2% profit against the
+  # unconstrained best: a majority write holds its slot for the round trip to
+  # the second-nearest follower, so slot demand scales with delay. Measured
+  # write latency at these values is 28 / 107 / 191 ms for local / regional /
+  # global. Too small a budget does not merely reject writes, it drives the
+  # scorer off strong consistency: at regional sMax 1,800, 56% of writes
+  # executed at the weakest level against 100% at majority here.
+  #
+  # regional: 7,200 costs 2.2% against this topology's best (9.46M/s vs 9.68M
+  # at 1,800) and buys back strong consistency - 100% of writes at majority
+  # against 44% at 1,800 - with 82.3% of offered writes admitted. Its two runs
+  # differed 5%, the least settled value of the three.
+  sMax: 7200
   # Leader-side write admission: entries per second charged one per admitted
   # write, refilled continuously, never returned. Calibrated from the
   # measured max commit rate (sweep_smax.sh, ~80% of it). Universal.
@@ -77,6 +144,26 @@ server:
   # batch cap, limits pipelining. Explicit value disables gRPC BDP
   # auto-tuning, making the window a fixed experiment parameter.
   replicationFlowControlWindowBytes: 4194304
+  # Smallest gap between two sends to the same follower when the batch is
+  # short of maxEntriesPerReplicationBatch. Without it the pipeline is
+  # self-clocked: a follower acknowledgement pumps the next batch at once, so
+  # batch size is whatever arrived during one round trip. That makes batching
+  # proportional to inter-node latency, and the local topology - which should
+  # be the fastest - batched 40x worse than the global one for the same work,
+  # went message-rate bound on the leader, and expired majority writes against
+  # their deadlines (MONGODB_BASELINES.md). A batch at the cap never waits, so
+  # catch-up and overload are unaffected; only a trickle waits, at most once.
+  # 5 ms, measured on the local topology after the delay-class deduplication
+  # fix: against 1 ms it raised C from 800,000 to 900,000, cut leader-to-follower
+  # messages from 3,048/s to 744/s by growing the batch from 135 to 580 entries,
+  # and LOWERED mean write latency (18.8 ms against 21.1 ms at 800,000) - the
+  # message-rate saving outweighs the wait it adds. 10 ms is worse, collapsing
+  # tracking to 71% at the top rungs. Held at 5 ms on every topology because the
+  # per-follower send gap it has to exceed is 1.31 ms on local, 2.63 ms on
+  # regional and 6.75 ms on global, so it binds hardest exactly where batching
+  # was worst; the regional and global halves of that were not measured
+  # separately against 1 ms.
+  replicationLingerMs: 5.0
   # Followers may serve linearizable reads by fetching a confirmed read index
   # from the leader (batched rounds) and waiting for their own commit index
   # to catch up. Relieves leader concentration at the cost of an extra hop.
@@ -107,6 +194,31 @@ chameleon:
   # still decides levels, upgrades are free, and admission is only the hard
   # occupancy cap.
   lambdaMin: 0.0001
+  # Price ceiling: the largest value the shadow price may take. Purely
+  # anti-windup - it changes no admission decision, because the price has
+  # already refused everything well below it.
+  #
+  # A level survives scoring only while its expected profit exceeds
+  # lambda * omega (RungScorer step 4f), so with the largest rung profit in
+  # this SLA table at 150, any lambda above 150 / omega refuses every request.
+  # Even an implausibly fast omega of 0.01 ms puts that saturation point at
+  # 15,000, so 1e6 clears it by a factor of ~67 and can never take away
+  # authority the price actually needed.
+  #
+  # Without a ceiling the price does not stop there. Under overload in-flight
+  # is pinned by server.ingressHardCapInFlight, not by the price, so u stays
+  # above uTarget no matter how high lambda climbs and the multiplicative
+  # update compounds unopposed: measured on the local topology at 2.5C, u sat
+  # at 18.74 for a whole 60 s Flash phase while lambda grew by 10^38 every five
+  # seconds, hit Double.POSITIVE_INFINITY after 45 s, and stayed there - inf
+  # times exp(negative) is still inf - so that leader refused every request for
+  # the remaining 41% of the run while its followers ran normally.
+  #
+  # The ceiling also bounds recovery, which is proportional to log(lambdaMax):
+  # decay is exp(eta * (0 - uTarget)) per interval, so returning to the floor
+  # from 1e6 takes about 27 s, against roughly 460 s from the 1e167 the
+  # regional topology reached and never from infinity.
+  lambdaMax: 1.0e6
 
 # Mode-independent client mechanics.
 client:
@@ -389,13 +501,25 @@ workload:
   # (geo.clientSites), so this must be divisible by the number of sites:
   # 60 = 10 per site across the six regional sites.
   sessionsPerApplication: 60
-  # Threads injecting the workload. One thread caps at roughly 200-400k
-  # requests/s (per-request cost on a single core); the configured TPS is
-  # split evenly across threads each 100ms tick. Sessions are sharded across
-  # threads (thread t owns sessions t, t+K, ... of every application), so each
-  # session is still driven by exactly one thread. Must be
-  # <= sessionsPerApplication.
-  injectorThreads: 15
+  # Threads injecting the workload. The configured TPS is split evenly across
+  # threads each 100ms tick; sessions are sharded across threads (thread t owns
+  # sessions t, t+K, ... of every application), so each session is still driven
+  # by exactly one thread. Must be <= sessionsPerApplication.
+  #
+  # 30 was measured, not estimated. A single client machine emits what its
+  # threads can emit, and a thread that cannot produce its 100 ms quota simply
+  # under-delivers, so too few threads silently turn an overload phase into a
+  # smaller one. At 15 threads the client topped out at ~1.9M requests/s and
+  # produced only 75.5% of a 2.5M target; at 30 it hit 2,499,371/s, a dead hit.
+  # 45 is worse than 30 - 2.74M against 2.92M at a 3.0M target, and 85,537/s of
+  # expiries against 12,500/s at 2.5M - so past 30 the threads cost more in
+  # contention than they add. This bounds the largest phase rate the harness can
+  # honestly offer, which is what fixes C at 1,000,000 with a real 2.5C Flash.
+  #
+  # The figure this comment used to carry, 200-400k requests/s per thread, was
+  # wrong by a factor of three or more: the measurement is ~83k/thread at 30
+  # threads and never above 127k/thread at 15.
+  injectorThreads: 30
   # Named weight vectors the phases reference. Each injected request is drawn
   # from the active phase's mix by weight: the entry fixes the application,
   # whether it is a read or a write, and the SLA it names, so the read/write
@@ -498,49 +622,65 @@ workload:
       - { applicationId: 4, type: read,  slaId: 1, weight: 25 }
       - { applicationId: 4, type: write, slaId: 1, weight: 10 }
   # The day sequence (EXPERIMENT.md): one continuous run, sessions persist
-  # throughout so history and lag carry across segments. Rates are fractions
-  # of measured capacity C = 400000 (recalibrate C per deployment and scale
-  # these together). The cluster is provisioned for ordinary peak plus
-  # headroom, not for the flash sale: normal sits at 0.5C and the sale day
-  # exceeds C.
+  # throughout so history and lag carry across segments. Rates are fractions of
+  # C = 1,000,000, common to all three topologies because C is a property of the
+  # workload, not of the deployment - only sMax is per-topology. The cluster is
+  # provisioned for ordinary peak plus headroom, not for the flash sale: normal
+  # sits at 0.5C and the sale day exceeds C.
+  #
+  # 2.5C = 2,500,000 is the largest rate the harness can honestly offer, and it
+  # is close to the edge: with workload.injectorThreads at 30 a single client
+  # emits 2,499,371/s on local, 2,491,616/s on regional and 2,497,747/s on
+  # global, skipping 0.08% at worst, while 3,000,000 falls short by 3-10% on
+  # every topology. Raising any rate past 2.5C, or lowering injectorThreads,
+  # makes the phase a smaller multiple of C than it claims - the injector now
+  # counts and warns about skipped budget, so check for that warning rather than
+  # trusting the configured rate.
   phases:
     - name: WarmUp          # warm up the cluster
       durationSeconds: 30
-      totalTPS: 200000      # 0.5C
+      totalTPS: 500000     # 0.5C
       mix: normal
     - name: NormalDay       # baseline: price on its floor, upgrades free
       durationSeconds: 300
-      totalTPS: 200000      # 0.5C
+      totalTPS: 500000     # 0.5C
       mix: normal
     - name: HolidayPlateau  # sustained lift; equilibrium, where oscillation would appear
       durationSeconds: 300
-      totalTPS: 320000      # 0.8C
+      totalTPS: 800000     # 0.8C
       mix: holiday
     - name: SaleDay         # Prime Day scale: rate and value rise together
       durationSeconds: 300
-      totalTPS: 720000      # 1.8C
+      totalTPS: 1800000    # 1.8C
       mix: saleDay
     - name: PreFlash        # login surge; write-heavy A3 drives lag up before the burst
       durationSeconds: 120
-      totalTPS: 400000      # 1.0C
+      totalTPS: 1000000    # 1C
       mix: preFlash
     - name: Flash           # ~60% must be refused; floor forbids downgrading
       durationSeconds: 60
-      totalTPS: 1000000      # 2.5C
+      totalTPS: 2500000    # 2.5C
       mix: flash
     - name: Collapse        # load vanishes: does the price come down promptly
       durationSeconds: 120
-      totalTPS: 280000      # 0.7C
+      totalTPS: 700000     # 0.7C
       mix: collapse
     - name: Payday          # composition shifts, volume barely does; the valuable tenant surges
       durationSeconds: 300
-      totalTPS: 240000      # 0.6C
+      totalTPS: 600000     # 0.6C
       mix: payday
     - name: ReturnToNormal  # recovery, compared directly against the opening segment
       durationSeconds: 300
-      totalTPS: 200000      # 0.5C
+      totalTPS: 500000     # 0.5C
       mix: normal
     - name: CoolDown        # cool down to handle shutdown delays
       durationSeconds: 30
-      totalTPS: 200000      # 0.5C
+      totalTPS: 500000     # 0.5C
       mix: normal
+# Which store this run drives. "framed" is the Java store in this repo: the
+# five ServerNodes and their own Raft replication, reached over the framed TCP
+# ingress. "mongodb" instead drives five patched mongods and is configured by a
+# mongodb: block after this line. Stated explicitly rather than defaulted,
+# because a config that lost this line once ran a whole mongod calibration
+# ladder against the Java store and produced an entirely plausible table.
+transport: framed

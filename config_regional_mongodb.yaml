@@ -55,18 +55,35 @@ server:
   # level of the same view (reads) or acks with the replication reached so
   # far (writes). Client-sent wait bounds are clamped to this too.
   maxWaitMs: 500
-  # Occupancy slot budget: the time-weighted average number of requests in
-  # flight the node is calibrated for, measured at the latency knee.
-  # Utilization u = framed-admission-to-terminal slot-time / (sMax * interval).
-  # The ingress hard backstop admits at most 1.5x sMax requests in flight, in
-  # every mode. mongod: PROVISIONAL, from the primary's AvgInFlight in
-  # occupancy_0.csv at the geo knee (runs/probelowgeo_20260916_211441, weakest
-  # arm, 100,000 requests/s: 432 mean, 599 peak). Followers sit near 5 at the
-  # same rate because local reads finish in under a millisecond, so this value
-  # regulates the primary, where writes and strong reads wait on replication.
-  # Confirm with a chameleon-arm probe that the price leaves its floor between
-  # 0.8C and 1.8C before the day sequence (MONGODB_PORT.md Milestone 4).
-  sMax: 450
+  # Most requests the ingress event loop holds before refusing new ones. Was
+  # derived as 1.5 * sMax; separated because a calibration probe pins sMax far
+  # above reach to silence the price, and that removed this backstop with it,
+  # letting the receive queue grow until requests arrived already dead. Set to
+  # 1.5 * sMax here, which is what the derivation produced.
+  ingressHardCapInFlight: 3600
+  # Occupancy slot budget: the concurrency this node is allowed to carry.
+  # Utilization u = slot-time / (sMax * interval), and uTarget holds the mean at
+  # 85% of the budget. Pushed to mongod as chameleonSMax; note that
+  # ingressHardCapInFlight and replicationLingerMs in this file are NOT pushed
+  # and have no effect on a mongod run - mongod uses its own replication, and
+  # its concurrency is bounded by the driver pool and WiredTiger tickets.
+  #
+  # Calibrated by sweeping sMax at C = 120,000 and reading realized profit, with
+  # a 2.5C rung in the same run so the overload behaviour is measured rather than
+  # assumed. The old derivation - unregulated in-flight at C, sMax pinned out of
+  # reach - is not usable: with the price silenced there is no equilibrium, and
+  # on this store the answer comes out as whatever the driver pool allows.
+  #
+  # The binding constraint is that the price must actually regulate. Too large an
+  # sMax and u never reaches uTarget, so lambda decays to lambdaMin and stays
+  # there through the whole run, overload included - which is the priceless
+  # ablation, not the chameleon arm. That is what rules out the nominally
+  # most profitable value on the global topology (see below).
+  #
+  # regional: 1,200 is the outright best at both rates (1,227,451/s at C and
+  # 1,800,988/s at 2.5C), the only value in the sweep that wins at both, with
+  # lambda 2.4e-1 in overload.
+  sMax: 1200
   # Leader-side write admission: entries per second charged one per admitted
   # write, refilled continuously, never returned. Calibrated from the
   # measured max commit rate, ~80% of it. Universal. mongod: the primary
@@ -91,6 +108,18 @@ server:
   # batch cap, limits pipelining. Explicit value disables gRPC BDP
   # auto-tuning, making the window a fixed experiment parameter.
   replicationFlowControlWindowBytes: 4194304
+  # Smallest gap between two sends to the same follower when the batch is
+  # short of maxEntriesPerReplicationBatch. Without it the pipeline is
+  # self-clocked: a follower acknowledgement pumps the next batch at once, so
+  # batch size is whatever arrived during one round trip. That makes batching
+  # proportional to inter-node latency, and the local topology - which should
+  # be the fastest - batched 40x worse than the global one for the same work,
+  # went message-rate bound on the leader, and expired majority writes against
+  # their deadlines (MONGODB_BASELINES.md). A batch at the cap never waits, so
+  # catch-up and overload are unaffected; only a trickle waits, at most once.
+  # 1 ms removes most of the message-rate penalty for 0.5 ms of mean added
+  # write latency, against a tightest majority-write deadline of 120 ms.
+  replicationLingerMs: 1.0
   # Followers may serve linearizable reads by fetching a confirmed read index
   # from the leader (batched rounds) and waiting for their own commit index
   # to catch up. Relieves leader concentration at the cost of an extra hop.
@@ -121,6 +150,31 @@ chameleon:
   # still decides levels, upgrades are free, and admission is only the hard
   # occupancy cap.
   lambdaMin: 0.0001
+  # Price ceiling: the largest value the shadow price may take. Purely
+  # anti-windup - it changes no admission decision, because the price has
+  # already refused everything well below it.
+  #
+  # A level survives scoring only while its expected profit exceeds
+  # lambda * omega (RungScorer step 4f), so with the largest rung profit in
+  # this SLA table at 150, any lambda above 150 / omega refuses every request.
+  # Even an implausibly fast omega of 0.01 ms puts that saturation point at
+  # 15,000, so 1e6 clears it by a factor of ~67 and can never take away
+  # authority the price actually needed.
+  #
+  # Without a ceiling the price does not stop there. Under overload in-flight
+  # is pinned by server.ingressHardCapInFlight, not by the price, so u stays
+  # above uTarget no matter how high lambda climbs and the multiplicative
+  # update compounds unopposed: measured on the local topology at 2.5C, u sat
+  # at 18.74 for a whole 60 s Flash phase while lambda grew by 10^38 every five
+  # seconds, hit Double.POSITIVE_INFINITY after 45 s, and stayed there - inf
+  # times exp(negative) is still inf - so that leader refused every request for
+  # the remaining 41% of the run while its followers ran normally.
+  #
+  # The ceiling also bounds recovery, which is proportional to log(lambdaMax):
+  # decay is exp(eta * (0 - uTarget)) per interval, so returning to the floor
+  # from 1e6 takes about 27 s, against roughly 460 s from the 1e167 the
+  # regional topology reached and never from infinity.
+  lambdaMax: 1.0e6
 
 # Mode-independent client mechanics.
 client:
@@ -351,17 +405,17 @@ timedFailure:
 geo:
   enabled: true
   # One-way latency in ms added from server i to server j (row i, column j);
-  # numServers x numServers, the diagonal must be 0. Global topology
-  # (EXPERIMENT.md): five regions worldwide - A Virginia (leader), B Oregon,
-  # C Ireland, D Singapore, E Sao Paulo. Quorum is the leader plus Oregon
-  # and Ireland, about 80 ms round trip; replica lag runs 30 ms at Oregon to
-  # 115 ms at Singapore.
+  # numServers x numServers, the diagonal must be 0. Regional topology
+  # (EXPERIMENT.md): five North American regions - A Virginia (leader),
+  # B Ohio, C Montreal, D N. California, E Oregon. Quorum is the leader plus
+  # Ohio and Montreal, about 20 ms round trip; replica lag runs 6 ms at Ohio
+  # to 35 ms at Oregon.
   interServerLatencyMs:
-    - [0,   30,  40,  115, 60]
-    - [30,  0,   65,  85,  90]
-    - [40,  65,  0,   90,  95]
-    - [115, 85,  90,  0,   160]
-    - [60,  90,  95,  160, 0]
+    - [0,  6,  10, 30, 35]
+    - [6,  0,  12, 25, 25]
+    - [10, 12, 0,  38, 35]
+    - [30, 25, 38, 0,  10]
+    - [35, 25, 35, 10, 0]
   # Client sites: every session belongs to one site (session s of every
   # application lives at site s mod #sites; sessionsPerApplication must
   # divide evenly). latencyMs is the one-way delay from the site to each
@@ -369,18 +423,18 @@ geo:
   # enabled, which is the address the per-site delay rules match on;
   # 127.0.0.1 stays rule-free for the driver's admin RPCs.
   #
-  # Global topology (EXPERIMENT.md): one site colocated with each node
-  # (0.5 ms to it), plus Tokyo with no local replica - its nearest node
-  # (Singapore, 35 ms) is also the stalest (115 ms behind the leader), the
-  # same routing-quality probe as Phoenix at a larger scale, mirroring
-  # Pileus's China client.
+  # Regional topology (EXPERIMENT.md): one site colocated with each node
+  # (0.5 ms to it), plus Phoenix with no local replica - its nearest node
+  # (N. California) is also the stalest, the cleanest single probe of
+  # routing quality (least-RTT takes close-and-lagging; freshness-aware pays
+  # a little more distance for much fresher data).
   clientSites:
-    - { name: virginia,  latencyMs: [0.5, 30,  40,  115, 60] }
-    - { name: oregon,    latencyMs: [30,  0.5, 65,  85,  90] }
-    - { name: ireland,   latencyMs: [40,  65,  0.5, 90,  95] }
-    - { name: singapore, latencyMs: [115, 85,  90,  0.5, 160] }
-    - { name: saopaulo,  latencyMs: [60,  90,  95,  160, 0.5] }
-    - { name: tokyo,     latencyMs: [85,  50,  110, 35,  130] }
+    - { name: virginia,    latencyMs: [0.5, 6,   10,  30,  35] }
+    - { name: ohio,        latencyMs: [6,   0.5, 12,  25,  25] }
+    - { name: montreal,    latencyMs: [10,  12,  0.5, 38,  35] }
+    - { name: ncalifornia, latencyMs: [30,  25,  38,  0.5, 10] }
+    - { name: oregon,      latencyMs: [35,  25,  35,  10,  0.5] }
+    - { name: phoenix,     latencyMs: [25,  20,  28,  10,  15] }
 
 # The simulated workload: keys, session population, and the phase schedule.
 workload:
@@ -401,7 +455,7 @@ workload:
   # Sessions persist across phases, so history carries forward. Only the
   # metrics ledger is shared. Sessions spread evenly across the client sites
   # (geo.clientSites), so this must be divisible by the number of sites:
-  # 60 = 10 per site across the six global sites.
+  # 60 = 10 per site across the six regional sites.
   sessionsPerApplication: 60
   # Threads injecting the workload. One thread caps at roughly 200-400k
   # requests/s (per-request cost on a single core); the configured TPS is
@@ -512,58 +566,70 @@ workload:
       - { applicationId: 4, type: read,  slaId: 1, weight: 25 }
       - { applicationId: 4, type: write, slaId: 1, weight: 10 }
   # The day sequence (EXPERIMENT.md): one continuous run, sessions persist
-  # throughout so history and lag carry across segments. Rates are fractions
-  # of measured capacity C = 100000. Unlike the Java store, whose C = 400000
-  # holds in every topology, mongod's capacity depends on the topology: each
-  # in-flight request holds a connection and a server thread, so geo latency
-  # multiplies in-flight by 10 to 15 at the same rate and the knee moves from
-  # about 170,000 requests/s without delays to about 100,000 under the global
-  # delay rules (MONGODB_BASELINES.md 3f). MongoDB runs only on the global
-  # topology, so C is its geo knee. The cluster is provisioned for ordinary
-  # peak plus headroom, not for the flash sale: normal sits at 0.5C and the
-  # sale day exceeds C.
+  # throughout so history and lag carry across segments. Rates are fractions of
+  # C = 120,000, common to all three topologies because C is a property of the
+  # workload, not of the deployment - only sMax is per-topology. The cluster is
+  # provisioned for ordinary peak plus headroom, not for the flash sale: normal
+  # sits at 0.5C and the sale day exceeds C.
+  #
+  # C is set by the global topology, which is the binding one: with the price
+  # silenced it tracks 96.6% of 120,000 and 95.3% of 135,000, against local and
+  # regional which are still above 97% at 250,000. That asymmetry is the driver,
+  # not mongod - every in-flight operation holds one pooled connection for its
+  # whole latency, so at a fixed maxPoolSize capacity falls as latency rises,
+  # and a majority write takes 13 ms on local, 77 ms on regional and 305 ms on
+  # global. The Java store multiplexes over 16 shared connections instead, and
+  # its capacity barely moves across the three (1.1-1.2M), which is why its C
+  # is ten times larger and topology-independent.
+  #
+  # Above roughly 270,000 all three plateau regardless of topology and the loss
+  # becomes driver pool refusal, so no larger C is measurable on one client
+  # machine. At 2.5C = 300,000 every topology is past its own capacity, which is
+  # the intent - but on global most of that refusal is pool checkout failure
+  # rather than the price declining work (9.5-37% price share depending on
+  # sMax), so ClientDropped must be reported as its own channel and never
+  # folded into price rejection.
   phases:
-    - name: WarmUp          # warm up the cluster and fill the driver pools
+    - name: WarmUp          # warm up the cluster
       durationSeconds: 30
-      totalTPS: 50000       # 0.5C
+      totalTPS: 60000      # 0.5C
       mix: normal
     - name: NormalDay       # baseline: price on its floor, upgrades free
       durationSeconds: 300
-      totalTPS: 50000       # 0.5C
+      totalTPS: 60000      # 0.5C
       mix: normal
     - name: HolidayPlateau  # sustained lift; equilibrium, where oscillation would appear
       durationSeconds: 300
-      totalTPS: 80000       # 0.8C
+      totalTPS: 96000      # 0.8C
       mix: holiday
     - name: SaleDay         # Prime Day scale: rate and value rise together
       durationSeconds: 300
-      totalTPS: 180000      # 1.8C
+      totalTPS: 216000     # 1.8C
       mix: saleDay
     - name: PreFlash        # login surge; write-heavy A3 drives lag up before the burst
       durationSeconds: 120
-      totalTPS: 100000      # 1.0C
+      totalTPS: 120000     # 1C
       mix: preFlash
     - name: Flash           # ~60% must be refused; floor forbids downgrading
       durationSeconds: 60
-      totalTPS: 250000      # 2.5C
+      totalTPS: 300000     # 2.5C
       mix: flash
     - name: Collapse        # load vanishes: does the price come down promptly
       durationSeconds: 120
-      totalTPS: 70000       # 0.7C
+      totalTPS: 84000      # 0.7C
       mix: collapse
     - name: Payday          # composition shifts, volume barely does; the valuable tenant surges
       durationSeconds: 300
-      totalTPS: 60000       # 0.6C
+      totalTPS: 72000      # 0.6C
       mix: payday
     - name: ReturnToNormal  # recovery, compared directly against the opening segment
       durationSeconds: 300
-      totalTPS: 50000       # 0.5C
+      totalTPS: 60000      # 0.5C
       mix: normal
     - name: CoolDown        # cool down to handle shutdown delays
       durationSeconds: 30
-      totalTPS: 50000       # 0.5C
+      totalTPS: 60000      # 0.5C
       mix: normal
-
 # MongoDB transport (MONGODB_PORT.md). The five mongods listen on this port on
 # their own cluster.serverHosts addresses (the CloudLab runner rewrites those to
 # 127.0.1.1..5); the replica set is initiated with member k tagged {node: "k"}

@@ -604,9 +604,14 @@ public final class KvSessionClient implements AutoCloseable {
         if (pending.get(requestId) != entry) {
             return;
         }
+        boolean transportQueue = failure.cause() == KvTransport.Cause.TRANSPORT_QUEUE;
         if (status.getCode() == Status.Code.DEADLINE_EXCEEDED) {
             if (pending.remove(requestId, entry)) {
-                ClientMetricsTracker.recordDeadlineExceeded(nodeId, siteName, chosenLabel(entry.request));
+                if (transportQueue) {
+                    ClientMetricsTracker.recordClientDropped(nodeId, siteName, chosenLabel(entry.request));
+                } else {
+                    ClientMetricsTracker.recordDeadlineExceeded(nodeId, siteName, chosenLabel(entry.request));
+                }
             }
             return;
         }
@@ -638,7 +643,9 @@ public final class KvSessionClient implements AutoCloseable {
             return;
         }
         if (pending.remove(requestId, entry)) {
-            if (System.nanoTime() >= entry.deadlineNanos) {
+            if (transportQueue) {
+                ClientMetricsTracker.recordClientDropped(nodeId, siteName, chosenLabel(entry.request));
+            } else if (System.nanoTime() >= entry.deadlineNanos) {
                 ClientMetricsTracker.recordDeadlineExceeded(nodeId, siteName, chosenLabel(entry.request));
             } else {
                 ClientMetricsTracker.recordFailure(nodeId, siteName, chosenLabel(entry.request));

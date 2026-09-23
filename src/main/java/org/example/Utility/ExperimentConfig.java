@@ -83,11 +83,27 @@ public final class ExperimentConfig {
     /** Mode-independent server mechanics. */
     public static final class ServerConfig {
         public Integer maxWaitMs;          // clamp on every server-side wait; expiry falls back / acks what is there
-        public Double sMax;                // occupancy slot budget; the hard cap rejects above 1.5x this in every mode
+        // Most requests the ingress event loop will hold before it refuses new
+        // ones. Previously derived as 1.5 * sMax, which tied the backstop to the
+        // price's scale: a calibration probe pins sMax far above reach so the
+        // price cannot influence its own input, and that silently removed the
+        // backstop too, letting the receive queue grow to twenty seconds deep
+        // (MONGODB_BASELINES.md). Separating them lets a probe disable the price
+        // and keep flow control. 1.5 * sMax remains the value to use in a config
+        // that is not probing.
+        public Integer ingressHardCapInFlight;
+        public Double sMax;                // occupancy slot budget; the price's scale (the hard cap is ingressHardCapInFlight)
         public Double replicationBudgetPerSecond; // leader replication rate budget in entries/s (universal admission)
         public Integer maxEntriesPerReplicationBatch; // entries in one ordered replication-stream message
         public Integer maxInflightReplicationBatchesPerFollower; // bounded speculative pipeline window
         public Integer replicationFlowControlWindowBytes; // HTTP/2 flow-control window on the server-server path (both directions); must hold the inflight batch window in bytes
+        // Smallest gap, in ms, between two sends to the same follower when the
+        // batch is short of maxEntriesPerReplicationBatch. The pipeline is
+        // otherwise self-clocked - a follower acknowledgement pumps the next
+        // batch immediately - so batch size ends up proportional to round-trip
+        // time and a low-latency topology batches far worse than a distant one.
+        // A full batch never waits. 0 disables it (the self-clocked behaviour).
+        public Double replicationLingerMs;
         public Boolean followerLinearizableReads; // followers serve LIN via a leader read-index round (all modes)
         public Double histogramDecay;      // service-time histogram decay per 100 ms refresh tick, in (0, 1)
     }
@@ -98,6 +114,7 @@ public final class ExperimentConfig {
         public Double uTarget;             // price controller utilization target (~0.85)
         public Double eta;                 // price controller gain (~1)
         public Double lambdaMin;           // price floor; only its order of magnitude matters
+        public Double lambdaMax;           // price ceiling; anti-windup, see validation
     }
 
     /** Mode-independent client mechanics. */
@@ -175,6 +192,13 @@ public final class ExperimentConfig {
         // so the delay rules can tell sites apart. Defined and used even when
         // geo is disabled (sites then differ only in name; nothing binds).
         public List<ClientSite> clientSites;
+        // Optional: the source address each client site binds, one per
+        // clientSites entry. Omitted for a single-host run, where the sites
+        // share the machine and take the loopback convention below. A
+        // distributed run (run_all_cloudlab.sh --hosts) sets this to routable
+        // aliases on the client machine, since loopback addresses cannot be
+        // reached from the server machines.
+        public List<String> clientSiteBindHosts;
     }
 
     /** One client site: a name for the ledger and its one-way delay to each server. */
@@ -197,6 +221,19 @@ public final class ExperimentConfig {
             throw new IllegalArgumentException("client site index must be in [0, 253], got " + siteIndex);
         }
         return "127.0.2." + (siteIndex + 1);
+    }
+
+    /**
+     * The source address client site {@code siteIndex} binds in this
+     * experiment: {@code geo.clientSiteBindHosts} when the config names them
+     * (a distributed run, where the addresses must be routable from the server
+     * machines), otherwise the single-host loopback convention above.
+     */
+    public String siteBindHost(int siteIndex) {
+        if (geo.clientSiteBindHosts != null) {
+            return geo.clientSiteBindHosts.get(siteIndex);
+        }
+        return clientSiteBindHost(siteIndex);
     }
 
     /**
@@ -290,7 +327,7 @@ public final class ExperimentConfig {
                 for (int j = 0; j < site.latencyMs.length; j++) {
                     siteRows.append(j > 0 ? "," : "").append(site.latencyMs[j]);
                 }
-                siteHosts.append(clientSiteBindHost(s));
+                siteHosts.append(config.siteBindHost(s));
                 siteNames.append(site.name);
             }
             System.out.println("geoClientSiteLatencyMs=" + siteRows);
@@ -507,8 +544,13 @@ public final class ExperimentConfig {
     }
 
     private void validateTransport() {
+        // Required, not defaulted. A config that had lost this line once ran a
+        // whole mongod calibration ladder against the Java store: the default
+        // took effect, every other key was valid, and the results were entirely
+        // plausible. Which store a run drove is not something to infer.
         if (transport == null) {
-            transport = "framed";
+            throw new IllegalArgumentException(
+                    "transport is required and must be \"framed\" or \"mongodb\"");
         }
         if (!transport.equals("framed") && !transport.equals("mongodb")) {
             throw new IllegalArgumentException("transport must be \"framed\" or \"mongodb\", got '" + transport + "'");
@@ -593,6 +635,7 @@ public final class ExperimentConfig {
 
         require(server, "server");
         requirePositive(server.maxWaitMs, "server.maxWaitMs");
+        requirePositive(server.ingressHardCapInFlight, "server.ingressHardCapInFlight");
         requirePositive(server.sMax, "server.sMax");
         requirePositive(server.replicationBudgetPerSecond, "server.replicationBudgetPerSecond");
         requirePositive(server.maxEntriesPerReplicationBatch, "server.maxEntriesPerReplicationBatch");
@@ -600,6 +643,19 @@ public final class ExperimentConfig {
                 "server.maxInflightReplicationBatchesPerFollower");
         requirePositive(server.replicationFlowControlWindowBytes,
                 "server.replicationFlowControlWindowBytes");
+        require(server.replicationLingerMs, "server.replicationLingerMs");
+        if (!(server.replicationLingerMs >= 0) || !Double.isFinite(server.replicationLingerMs)) {
+            throw new IllegalArgumentException("server.replicationLingerMs must be a non-negative finite"
+                    + " number of milliseconds (0 disables the linger), got " + server.replicationLingerMs);
+        }
+        // Beyond the heartbeat there is no batching left to win and every
+        // majority write pays the wait; the tightest write rung in the repo
+        // configs allows 120 ms end to end.
+        if (server.replicationLingerMs > 20) {
+            throw new IllegalArgumentException("server.replicationLingerMs must not exceed 20 ms (the"
+                    + " heartbeat interval, which already bounds how long a batch can wait), got "
+                    + server.replicationLingerMs);
+        }
         if (server.replicationFlowControlWindowBytes < 65536) {
             throw new IllegalArgumentException(
                     "server.replicationFlowControlWindowBytes must be at least 65536 (the HTTP/2 default); got "
@@ -625,6 +681,20 @@ public final class ExperimentConfig {
         if (!(chameleon.lambdaMin >= 0) || !Double.isFinite(chameleon.lambdaMin)) {
             throw new IllegalArgumentException("chameleon.lambdaMin must be a non-negative finite number"
                     + " (0 pins the price at zero for the whole run), got " + chameleon.lambdaMin);
+        }
+        // Anti-windup. Admission keeps a level only while its expected profit
+        // exceeds lambda * omega, so beyond max_rung_profit / omega the price
+        // already refuses everything and more of it changes no decision - but
+        // the controller does not know that and keeps multiplying, because
+        // in-flight is bounded by the ingress cap rather than by the price, so
+        // u stays above target however high lambda goes. Unbounded, that
+        // reached Double.POSITIVE_INFINITY on the local topology 45 s into a
+        // 2.5C phase, and infinity is absorbing exactly as zero is: that node
+        // refused every request for the remaining 41% of the run.
+        require(chameleon.lambdaMax, "chameleon.lambdaMax");
+        if (!Double.isFinite(chameleon.lambdaMax) || !(chameleon.lambdaMax > chameleon.lambdaMin)) {
+            throw new IllegalArgumentException("chameleon.lambdaMax must be a finite number greater than"
+                    + " chameleon.lambdaMin (" + chameleon.lambdaMin + "), got " + chameleon.lambdaMax);
         }
 
         require(client, "client");
@@ -774,6 +844,31 @@ public final class ExperimentConfig {
                 if (!(v >= 0) || !Double.isFinite(v)) {
                     throw new IllegalArgumentException(sitePrefix + ".latencyMs[" + j
                             + "] must be a non-negative finite number, got " + v);
+                }
+            }
+        }
+        // Optional bind-host override: one routable source address per site,
+        // written by run_all_cloudlab.sh for a distributed run. Absent means
+        // the single-host loopback convention.
+        if (geo.clientSiteBindHosts != null) {
+            if (geo.clientSiteBindHosts.size() != geo.clientSites.size()) {
+                throw new IllegalArgumentException("geo.clientSiteBindHosts must have one entry per client site ("
+                        + geo.clientSites.size() + "), got " + geo.clientSiteBindHosts.size());
+            }
+            java.util.Set<String> bindHosts = new java.util.HashSet<>();
+            for (int s2 = 0; s2 < geo.clientSiteBindHosts.size(); s2++) {
+                String host = geo.clientSiteBindHosts.get(s2);
+                require(host, "geo.clientSiteBindHosts[" + s2 + "]");
+                // Dotted-quad only: the delay rules match on literal addresses,
+                // and a hostname here would resolve differently per machine.
+                if (!host.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")) {
+                    throw new IllegalArgumentException("geo.clientSiteBindHosts[" + s2
+                            + "] must be a literal IPv4 address, got '" + host + "'");
+                }
+                if (!bindHosts.add(host)) {
+                    throw new IllegalArgumentException("geo.clientSiteBindHosts[" + s2 + "] '" + host
+                            + "' is duplicated; each site needs its own source address so the delay rules"
+                            + " can tell sites apart");
                 }
             }
         }

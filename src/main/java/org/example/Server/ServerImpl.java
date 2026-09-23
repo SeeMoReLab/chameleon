@@ -108,9 +108,21 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     // Every gRPC channel this node opens, so shutdown() can close them all.
     private final List<ManagedChannel> ownedChannels = Collections.synchronizedList(new ArrayList<>());
 
+    // Liveness only: how often an idle leader must prove itself to a follower.
+    // Unrelated to how long entries may accumulate, which is the linger below.
     private static final int HEARTBEAT_INTERVAL_MS = 20;
     private static volatile int MAX_ENTRIES_PER_REPLICATION_BATCH = 4000;
     private static volatile int MAX_INFLIGHT_REPLICATION_BATCHES_PER_FOLLOWER = 4;
+    // Smallest gap between two sends to the same follower when the batch would
+    // be short of the cap. Without it the pipeline is self-clocked: every
+    // follower acknowledgement immediately pumps the next batch, so batch size
+    // is set by how many entries happen to have arrived in one round trip, and
+    // a low-latency topology therefore batches 40x worse than a high-latency
+    // one for the same work (MONGODB_BASELINES.md). A full batch never waits,
+    // and the heartbeat pump above still guarantees progress, so this is a
+    // floor on batch size rather than a delay on throughput.
+    private static volatile long REPLICATION_LINGER_NANOS =
+            TimeUnit.MILLISECONDS.toNanos(1);
     // HTTP/2 flow-control window for the server-server path, set on both the
     // replication channels and the Raft server (the receiver grants the
     // window, so the server side is the one that governs leader-to-follower
@@ -177,6 +189,8 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
         MAX_INFLIGHT_REPLICATION_BATCHES_PER_FOLLOWER =
                 config.server.maxInflightReplicationBatchesPerFollower;
         REPLICATION_FLOW_CONTROL_WINDOW_BYTES = config.server.replicationFlowControlWindowBytes;
+        REPLICATION_LINGER_NANOS =
+                TimeUnit.MICROSECONDS.toNanos(Math.round(config.server.replicationLingerMs * 1000.0));
     }
 
     /** The Raft server must announce the same window the channels assume. */
@@ -185,11 +199,25 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     }
 
     static void applyReplicationSettingsForTest(int maxEntriesPerBatch, int maxInflightBatches) {
+        applyReplicationSettingsForTest(maxEntriesPerBatch, maxInflightBatches, 0.0);
+    }
+
+    static void applyReplicationSettingsForTest(int maxEntriesPerBatch, int maxInflightBatches,
+            double lingerMs) {
         if (maxEntriesPerBatch <= 0 || maxInflightBatches <= 0) {
             throw new IllegalArgumentException("replication batch and in-flight limits must be positive");
         }
+        if (!(lingerMs >= 0)) {
+            throw new IllegalArgumentException("replication linger must be non-negative, got " + lingerMs);
+        }
         MAX_ENTRIES_PER_REPLICATION_BATCH = maxEntriesPerBatch;
         MAX_INFLIGHT_REPLICATION_BATCHES_PER_FOLLOWER = maxInflightBatches;
+        REPLICATION_LINGER_NANOS = TimeUnit.MICROSECONDS.toNanos(Math.round(lingerMs * 1000.0));
+    }
+
+    /** The linger in nanoseconds, for tests and the pump's own scheduling. */
+    static long replicationLingerNanos() {
+        return REPLICATION_LINGER_NANOS;
     }
 
     /** Point the peer stubs at a cluster without a full config (tests use this directly). */
@@ -229,8 +257,17 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
             thread.setDaemon(true);
             return thread;
         });
+        // The pump must run at least as often as the linger, or a batch held back
+        // by it would wait for the heartbeat tick instead. Empty heartbeats stay
+        // rate-limited to HEARTBEAT_INTERVAL_MS inside the send path, so a fast
+        // tick costs nothing on an idle leader.
+        long pumpPeriodNanos = Math.max(1, Math.min(
+                TimeUnit.MILLISECONDS.toNanos(HEARTBEAT_INTERVAL_MS),
+                REPLICATION_LINGER_NANOS > 0
+                        ? REPLICATION_LINGER_NANOS
+                        : TimeUnit.MILLISECONDS.toNanos(HEARTBEAT_INTERVAL_MS)));
         this.replicationExecutor.scheduleAtFixedRate(this::pumpAllFollowersSafely,
-                0, HEARTBEAT_INTERVAL_MS, TimeUnit.MILLISECONDS);
+                0, pumpPeriodNanos, TimeUnit.NANOSECONDS);
         this.waitScheduler = Executors.newScheduledThreadPool(1);
         this.electionTimer = new CustomTimer(this::startElection,
                 electionTimeoutMs(serverId), TimeUnit.MILLISECONDS);
@@ -801,6 +838,10 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     // the ordered replication messages it sent, so a run shows whether batches
     // are full (pipeline-bound) or starved (intake-bound).
     private final AtomicLong batchRpcsLastSecond = new AtomicLong();
+    // Cumulative, never reset: how many replication messages this leader has
+    // sent. The per-second counters above are cleared by the printer, so they
+    // cannot answer "how many messages did this workload cost".
+    private final AtomicLong replicationMessagesSent = new AtomicLong();
     private final AtomicLong batchEntriesLastSecond = new AtomicLong();
     private final AtomicLong batchBytesLastSecond = new AtomicLong();
     private final AtomicLong batchMaxLastSecond = new AtomicLong();
@@ -808,6 +849,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     private final AtomicLong batchLastPrintMs = new AtomicLong(System.currentTimeMillis());
 
     private void recordAppendEntriesBatch(int entries, int serializedBytes) {
+        replicationMessagesSent.incrementAndGet();
         batchRpcsLastSecond.incrementAndGet();
         batchEntriesLastSecond.addAndGet(entries);
         batchBytesLastSecond.addAndGet(serializedBytes);
@@ -984,6 +1026,15 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
                     || now - pipeline.lastSendNanos < TimeUnit.MILLISECONDS.toNanos(HEARTBEAT_INTERVAL_MS))) {
                 return null;
             }
+            // Hold a short batch back until the linger has elapsed, whatever woke
+            // the pump - an acknowledgement, the stream turning writable, a fresh
+            // append, or the periodic tick. A batch at the cap is never delayed,
+            // so catch-up and overload both run at full speed; only the trickle
+            // case waits, and it waits at most one linger.
+            if (hasData && logSize - pipeline.nextSendIndex < MAX_ENTRIES_PER_REPLICATION_BATCH
+                    && now - pipeline.lastSendNanos < REPLICATION_LINGER_NANOS) {
+                return null;
+            }
 
             int start = pipeline.nextSendIndex;
             int end = hasData
@@ -1135,6 +1186,11 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
 
     int maxObservedReplicationInflight(int followerId) {
         return maxObservedReplicationInflight.get(followerId);
+    }
+
+    /** Replication messages sent since startup, for tests and diagnostics. */
+    long replicationMessagesSent() {
+        return replicationMessagesSent.get();
     }
 
     int maxObservedReplicationBatchEntries() {

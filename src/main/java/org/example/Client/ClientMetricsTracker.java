@@ -61,6 +61,7 @@ public final class ClientMetricsTracker {
         final AtomicLong fallbacks = new AtomicLong();
         final AtomicLong redirects = new AtomicLong();
         final AtomicLong failures = new AtomicLong();
+        final AtomicLong clientDropped = new AtomicLong();
         final AtomicLong rejected = new AtomicLong();
         final DoubleAdder rejectionTotalLatencySumMs = new DoubleAdder();
         final DoubleAdder rejectionFeedbackLatencySumMs = new DoubleAdder();
@@ -89,6 +90,7 @@ public final class ClientMetricsTracker {
     private static final AtomicLong runRejected = new AtomicLong();
     private static final AtomicLong runLost = new AtomicLong();
     private static final AtomicLong runViolations = new AtomicLong();
+    private static final AtomicLong runClientDropped = new AtomicLong();
     private static final DoubleAdder runPredictedProfit = new DoubleAdder();
     private static final DoubleAdder runRealizedProfit = new DoubleAdder();
 
@@ -151,6 +153,25 @@ public final class ClientMetricsTracker {
     public static void recordFailure(int nodeId, String site, String chosen) {
         cell(nodeId, site, chosen, "-").failures.incrementAndGet();
         maybeFlush();
+    }
+
+    /**
+     * The client transport declined the request because its own queue for that node
+     * could not deliver inside the deadline. Counted apart from both violations and
+     * rejections on purpose: a violation is work the cluster accepted and delivered
+     * late, a rejection is admission control refusing on value, and this is neither.
+     * It is arrival-ordered shedding by the transport, with no view of what a request
+     * is worth, so lumping it into either would hide the difference that matters when
+     * comparing a pooled transport against a multiplexed one.
+     */
+    public static void recordClientDropped(int nodeId, String site, String chosen) {
+        cell(nodeId, site, chosen, "-").clientDropped.incrementAndGet();
+        runClientDropped.incrementAndGet();
+        maybeFlush();
+    }
+
+    public static long totalClientDropped() {
+        return runClientDropped.get();
     }
 
     // Transport errors by cause, every attempt (retries included), so a run
@@ -319,7 +340,7 @@ public final class ClientMetricsTracker {
                         + "Rejected,AvgRejectTotalMs,P50RejectTotalMs,"
                         + "P90RejectTotalMs,P99RejectTotalMs,AvgRejectFeedbackMs,P50RejectFeedbackMs,"
                         + "P90RejectFeedbackMs,P99RejectFeedbackMs,InvalidRejectFeedbackTimestamps,"
-                        + "Lost,DeadlineExceeded,Violations");
+                        + "Lost,DeadlineExceeded,Violations,ClientDropped");
                 // Raw client-latency histogram (served responses), one column
                 // per geometric bucket: bucket i's upper edge is
                 // 0.5 * 1.15^(i+1) ms, the last bucket is the overflow.
@@ -347,6 +368,7 @@ public final class ClientMetricsTracker {
                 long lost = c.lost.getAndSet(0);
                 long deadlineExceeded = c.deadlineExceeded.getAndSet(0);
                 long violations = c.violations.getAndSet(0);
+                long clientDropped = c.clientDropped.getAndSet(0);
                 double latencySum = c.latencySumMs.sumThenReset();
                 double predicted = c.predictedProfitSum.sumThenReset();
                 double realized = c.realizedProfitSum.sumThenReset();
@@ -377,7 +399,7 @@ public final class ClientMetricsTracker {
                     rejectionFeedbackBucketCount += rejectionFeedbackBuckets[i];
                 }
                 if (count == 0 && transportCalls == 0 && fallbacks == 0 && redirects == 0 && failures == 0
-                        && rejected == 0 && lost == 0 && violations == 0) {
+                        && rejected == 0 && lost == 0 && violations == 0 && clientDropped == 0) {
                     continue; // no activity this interval
                 }
                 double avg = count == 0 ? 0.0 : latencySum / count;
@@ -387,7 +409,7 @@ public final class ClientMetricsTracker {
                 }
                 out.printf("%d,%d,%s,%s,%s,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,"
                                 + "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%d,"
-                                + "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%d%s%n",
+                                + "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d%s%n",
                         now, k.nodeId(), k.site(), k.chosen(), k.executed(), count, avg,
                         quantileMs(buckets, bucketTotal, 0.50), quantileMs(buckets, bucketTotal, 0.90),
                         quantileMs(buckets, bucketTotal, 0.95),
@@ -408,7 +430,7 @@ public final class ClientMetricsTracker {
                         quantileMs(rejectionFeedbackBuckets, rejectionFeedbackBucketCount, 0.50),
                         quantileMs(rejectionFeedbackBuckets, rejectionFeedbackBucketCount, 0.90),
                         quantileMs(rejectionFeedbackBuckets, rejectionFeedbackBucketCount, 0.99),
-                        invalidRejectionFeedbackTimestamps, lost, deadlineExceeded, violations,
+                        invalidRejectionFeedbackTimestamps, lost, deadlineExceeded, violations, clientDropped,
                         bucketCols);
             }
         } catch (IOException e) {

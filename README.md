@@ -350,6 +350,8 @@ The framework automatically generates CSV files such as:
 
 These files are later used for plotting and analysis.
 
+For framed transport queueing and capacity diagnosis, run CloudLab with `--diagnostics`. See [Transport diagnostics](TRANSPORT_DIAGNOSTICS.md) for the timing/queue CSVs, event-loop probes, TCP/netem and clock snapshots, and JVM CPU recordings.
+
 ---
 
 # Transaction Types
@@ -591,17 +593,69 @@ bash run_all_cloudlab_sweep.sh kevindmw@clnode330.clemson.cloudlab.us ~/.ssh/clo
 bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/cloudlab --modes "pileus;strongest;weakest;chameleon;chameleonPileus" --smax "1125" --seeds "100" "config_regional.yaml;config_global.yaml"
 <!-- MongoDB (MONGODB_PORT.md). Same sweep script; the node must carry the patched mongod
      (build_cloudlab.sh). C = 100,000 on the global topology, sMax 450, budget 85,000, pool cap 1,000
-     (MONGODB_BASELINES.md 3i). Runs land in runs/config_mongodb_<loadsweep|global>_<mode>_<sMax>_<seed>/.
+     (MONGODB_BASELINES.md 3i). Runs land in runs/config_<loadsweep|global>_mongodb_<mode>_<sMax>_<seed>/.
      The static load sweep is 10 minutes per arm, the day sequence 31; a four-arm pass of both is about 2 h 45 min.
-     chameleonPileus has not been smoked against mongod; add it to --modes only after a config_mongodb_smoke_geo run in that mode. -->
+     chameleonPileus has not been smoked against mongod; add it to --modes only after a config_smoke_global_*_mongodb run in that mode. -->
 
-bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_mongodb_loadsweep.yaml"
-bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_mongodb_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_loadsweep_mongodb.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_global_mongodb.yaml"
 
 <!-- MongoDB sMax sensitivity, the same 0.25x to 4x ladder as the Java store's (1125 to 18000 around 4500), around 450.
      One node per sMax value if several nodes are provisioned; on one node, run them in sequence. -->
-bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "112.5;225;900;1800" --seeds "42" "config_mongodb_loadsweep.yaml"
-bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "112.5;225;900;1800" --seeds "42" "config_mongodb_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "112.5;225;900;1800" --seeds "42" "config_loadsweep_mongodb.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "112.5;225;900;1800" --seeds "42" "config_global_mongodb.yaml"
 
 <!-- MongoDB repeats under other seeds, as for the Java store -->
-bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "7;100" "config_mongodb_loadsweep.yaml;config_mongodb_global.yaml"
+bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "7;100" "config_loadsweep_mongodb.yaml;config_global_mongodb.yaml"
+
+---
+
+# Distributed runs: one machine per server, plus one for the client
+
+Every script that talks to CloudLab takes either a single host, which is the original layout with the servers and the driver sharing one machine, or `--hosts <file> --key <key>`, which spreads the cluster over one machine per Raft node plus one for the driver.
+
+The single-host layout emulates the geo topology on loopback, so it is cheap to schedule but the machines' CPUs are shared. That is visible in the measurements: mongod's served ceiling is about the same on every topology (112,547 local, 119,512 regional, 121,251 global), which is the machine rather than the store, and on the local topology one mongod becomes a straggler under the contention and every pool checkout timeout in the run lands on it (MONGODB_BASELINES.md 3l). Capacity also does not fall as the topology spreads, because netem delays packets without consuming CPU. A distributed run removes all three confounds, at the cost of an allocation of `numServers + 1` machines.
+
+## The hosts file
+
+See `hosts.example.txt`. One line per machine: the role, the ssh target this laptop uses, and the address the machines use to reach each other on the experiment network. Exactly one `client` line and one `server` line per Raft node, in node order.
+
+## Workflow
+
+```bash
+# once per allocation; the MongoDB build environment goes on the first server only
+./setup_cloudlab.sh --hosts hosts.txt --key ~/.ssh/cloudlab --mongodb
+
+# once per change to the chameleon patch; builds on the first server machine and
+# copies the binary to the others through the CloudLab project directory
+./build_cloudlab.sh --hosts hosts.txt --key ~/.ssh/cloudlab
+
+# once per run
+./run_all_cloudlab.sh --hosts hosts.txt --key ~/.ssh/cloudlab <label> config_global_mongodb.yaml
+
+# sweeps take the same two flags in place of the positional host and key
+./run_all_cloudlab_sweep.sh --hosts hosts.txt --key ~/.ssh/cloudlab \
+    --modes "weakest;strongest;pileus;chameleon" --seeds "42" "config_global_mongodb.yaml"
+
+# after an interrupted run
+./clean_cloudlab.sh --hosts hosts.txt --key ~/.ssh/cloudlab
+```
+
+## What the runner does differently
+
+`cluster.serverHosts` is rewritten to the machines' experiment-network addresses instead of `127.0.1.N`, and `geo.clientSiteBindHosts` is written into the config with one address per client site, because the loopback `127.0.2.x` convention is not reachable from the server machines. Those per-site addresses are aliases the runner adds to the client machine's experiment interface, from `--site-subnet` (default `10.99.0.0/24`, site k takes `.k+1`), and each server gets a route back to that subnet.
+
+Delays are applied per machine on egress, so each hop's one-way latency is added once by the sender, where the single-host layout puts both directions of every hop on one loopback. The totals match: a five-node, six-site global topology emits 80 one-way rules either way. Only the experiment interface is touched, so ssh on the control interface is unaffected.
+
+Before anything starts, the runner checks every machine's clock against NTP time and refuses to run if one is more than 2 ms off (the error names the machine and the `chronyc makestep` that fixes it). The servers judge each request's age and remaining deadline from the client's wall-clock stamps, so a freshly booted node that is still hundreds of milliseconds fast expires everything that reaches it, and a run on such a cluster completes and looks like a capacity result rather than failing.
+
+The servers start first, each signalling `servers_ready` once its port accepts, and only then does the driver start. Afterwards each machine's artifacts are fetched into the one run directory: the Java store's `occupancy_<i>.csv` and `server_<i>.log` are written on server *i*, as is `mongod_<i>.log`, while under the MongoDB transport the driver polls `serverStatus`, so those occupancy files come from the client. Each machine's `runner.log` is kept as `runner_node<i>.log`, and `hosts.txt` in the run directory records which machine was which node.
+
+## Before trusting a distributed number
+
+Two things are worth measuring once, since neither is checked automatically:
+
+- **The client machine's ceiling.** It now generates the whole offered load over a real NIC rather than loopback, and it is the obvious candidate for the new bottleneck. If it caps below the store, capacity is still measuring the harness, just a different part of it.
+- **The baseline round trip.** Loopback adds about 0.02 ms; a CloudLab LAN adds 0.1 to 0.2 ms, against a configured 0.5 ms for a colocated site. Measure it and subtract, or the local topology's shortest hops are systematically long.
+
+All six capacities and budgets in MONGODB_BASELINES.md 3l were measured on the single-host layout and do not carry over.

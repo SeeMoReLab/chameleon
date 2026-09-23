@@ -15,6 +15,7 @@ import org.bson.BsonValue;
 import org.bson.Document;
 import org.example.raft.KvRequest;
 import org.example.raft.KvResponse;
+import org.example.Client.KvTransport.Cause;
 import org.example.raft.ReadLevel;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
@@ -23,6 +24,7 @@ import org.reactivestreams.Subscription;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoExecutionTimeoutException;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.ReadPreference;
 import com.mongodb.ServerAddress;
 import com.mongodb.Tag;
@@ -148,13 +150,18 @@ public final class MongoTransport implements KvTransport {
 
     /**
      * Whether a request with {@code remainingMs} left should be refused rather than
-     * queued for a connection to {@code address}. True only for a pool that already
-     * holds its full complement, since a pool that can still grow makes a waiting
-     * request productive; a full pool's queue is other requests' round trips, and
-     * waiting out a queue longer than the deadline misses it and holds a slot meanwhile.
+     * queued for a connection to {@code address}. All three conditions are needed.
+     * The pool must already hold its full complement, since a pool that can still grow
+     * makes a waiting request productive. There must be a queue on it right now, or the
+     * smoothed wait latches: a pool whose requests are all refused performs no
+     * checkouts, so nothing fresh can contradict a stale high mean, and it locks out
+     * permanently. And the queue must have been taking longer than the deadline, since
+     * waiting out a queue longer than that misses it and holds a slot meanwhile.
      */
     static boolean refuseForQueue(MongoDriverEvents events, String address, int maxPoolSize, long remainingMs) {
-        return events.poolSaturated(address, maxPoolSize) && events.checkoutWaitMs(address) > remainingMs;
+        return events.poolSaturated(address, maxPoolSize)
+                && events.queueDepth(address) > 0
+                && events.checkoutWaitMs(address) > remainingMs;
     }
 
     @Override
@@ -228,7 +235,7 @@ public final class MongoTransport implements KvTransport {
             onError.accept(new RpcFailure(Status.DEADLINE_EXCEEDED.withDescription(
                     "connection pool at " + address + " is full and its checkout queue is "
                             + Math.round(events.checkoutWaitMs(address)) + " ms against " + maxTimeMs
-                            + " ms of deadline left"), 0));
+                            + " ms of deadline left"), 0, Cause.TRANSPORT_QUEUE));
             return () -> { };
         }
         Document command = request.getIsRead() ? findCommand(request, maxTimeMs) : updateCommand(request, maxTimeMs);
@@ -588,7 +595,13 @@ public final class MongoTransport implements KvTransport {
                                 + commandException.getErrorMessage()), 0));
                 return;
             }
-            onError.accept(new RpcFailure(Status.UNAVAILABLE.withDescription(describe(t)), 0));
+            // A checkout that timed out is the same phenomenon as the pre-dispatch refusal:
+            // our own pool could not produce a connection. Retry behaviour is unchanged;
+            // only the outcome it is finally counted under.
+            Cause cause = t instanceof MongoTimeoutException && t.getMessage() != null
+                    && t.getMessage().contains("while waiting for a connection")
+                            ? Cause.TRANSPORT_QUEUE : Cause.SERVER;
+            onError.accept(new RpcFailure(Status.UNAVAILABLE.withDescription(describe(t)), 0, cause));
         }
 
         /** The exception and its cause chain: "Exception opening socket" alone says nothing. */

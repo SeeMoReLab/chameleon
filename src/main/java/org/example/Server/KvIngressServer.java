@@ -169,7 +169,15 @@ public final class KvIngressServer implements AutoCloseable {
             if (correlationId <= 0) {
                 throw new CorruptedFrameException("correlation id must be positive");
             }
+            // How long this frame waited between the client sending it and this
+            // event loop reading it. Everything before this point - the client's
+            // outbound path, the wire, the receive buffer - is otherwise
+            // unmeasured, and a frame that has already burned its whole deadline
+            // out there is answered below without ever entering the server.
+            long ingressAgeNanos = TimeUnit.MILLISECONDS.toNanos(
+                    Math.max(0, receivedEpochMs - clientSendEpochMs));
             if (deadlineEpochMs <= receivedEpochMs) {
+                metrics.ingressAgeExpired(ingressAgeNanos);
                 writeTerminal(ctx.channel(), KvWireProtocol.DEADLINE_EXCEEDED,
                         correlationId, receivedEpochMs, false);
                 return;
@@ -182,6 +190,9 @@ public final class KvIngressServer implements AutoCloseable {
             }
 
             metrics.headerAccepted();
+            // After headerAccepted, so this shares its count exactly and the
+            // mean stays a mean over the frames it claims to cover.
+            metrics.ingressAgeAccepted(ingressAgeNanos);
             metrics.rpcOpened();
             plane.requestAdmitted();
             FramedResponse response = new FramedResponse(ctx.channel(), accepted, correlationId,

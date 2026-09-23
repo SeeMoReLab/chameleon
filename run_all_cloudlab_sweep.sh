@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# run_all_cloudlab_sweep.sh - run one experiment per parameter combination on
-# a CloudLab node by invoking run_all_cloudlab.sh once per combination. The
+# run_all_cloudlab_sweep.sh - run one experiment per parameter combination by
+# invoking run_all_cloudlab.sh once per combination, on either layout: a single
+# CloudLab node, or a distributed allocation described by a hosts file. The
 # swept axes are the base config file itself (';'-separated list) and the
 # `mode:`, `sMax:`, and `seed:` lines, rewritten textually in a copy of each
 # base config. Runs are sequential (the runner blocks until the remote
@@ -23,16 +24,32 @@
 # with narrowed lists (the failed run's partial results, if any, keep their
 # timestamped name).
 #
-# Usage:
+# Usage, one machine (servers and driver share it, geo on loopback):
 #   ./run_all_cloudlab_sweep.sh <user@host> <ssh-key-path> \
 #       --modes "chameleon;chameleonPileus;pileus;strongest;weakest" \
-#       --smax "6000;9000;12000" \
 #       --seeds "42;43;44" \
 #       "config_local.yaml;config_regional.yaml;config_global.yaml"
 #
+# Usage, one machine per server plus one for the driver:
+#   ./run_all_cloudlab_sweep.sh --hosts hosts.txt --key ~/.ssh/cloudlab \
+#       --modes "chameleon;chameleonPileus;pileus;strongest;weakest" \
+#       --seeds "42;43;44" \
+#       "config_local.yaml;config_regional.yaml;config_global.yaml"
+#
+# The hosts form also accepts --site-subnet and passes it through. Everything
+# else is identical between the two: the sweep does not care how many machines
+# there are, it just forwards the target arguments to run_all_cloudlab.sh.
+#
 # All flags take a ';'-separated list, may appear anywhere among the
-# arguments, and at least one of them is required; the remaining positionals
-# are host, key, and the ';'-separated config list, in that order.
+# arguments, and at least one of them is required. With <user@host> the
+# remaining positionals are host, key, and the ';'-separated config list, in
+# that order; with --hosts/--key the only positional is the config list.
+#
+# --smax exists but is rarely what you want now that sMax is calibrated per
+# topology (see CALIBRATION.md): one swept value applies to every config in
+# the run, so sweeping it across config_local/regional/global overrides three
+# different calibrated values with one number. Leave it out and each config
+# uses its own.
 #
 set -euo pipefail
 
@@ -74,6 +91,33 @@ while [[ $# -gt 0 ]]; do
             SEEDS_RAW="${1#--seeds=}"
             shift
             ;;
+        --hosts)
+            [[ $# -ge 2 ]] || die "--hosts requires a hosts file"
+            HOSTS_FILE="$2"
+            shift 2
+            ;;
+        --hosts=*)
+            HOSTS_FILE="${1#--hosts=}"
+            shift
+            ;;
+        --key)
+            [[ $# -ge 2 ]] || die "--key requires an ssh key path"
+            KEY_ARG="$2"
+            shift 2
+            ;;
+        --key=*)
+            KEY_ARG="${1#--key=}"
+            shift
+            ;;
+        --site-subnet)
+            [[ $# -ge 2 ]] || die "--site-subnet requires a.b.c.0/24"
+            SITE_SUBNET_ARG="$2"
+            shift 2
+            ;;
+        --site-subnet=*)
+            SITE_SUBNET_ARG="${1#--site-subnet=}"
+            shift
+            ;;
         --*)
             die "unknown flag: $1"
             ;;
@@ -84,11 +128,26 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-USAGE="usage: ./run_all_cloudlab_sweep.sh <user@host> <ssh-key-path> --modes \"m1;m2;...\" --smax \"s1;s2;...\" --seeds \"k1;k2;...\" \"config1.yaml;config2.yaml;...\" (at least one flag)"
-[[ ${#POSITIONAL[@]} -eq 3 ]] || die "$USAGE"
-HOST="${POSITIONAL[0]}"
-KEY="${POSITIONAL[1]}"
-CONFIGS_RAW="${POSITIONAL[2]}"
+USAGE="usage: ./run_all_cloudlab_sweep.sh <user@host> <ssh-key-path> --modes \"m1;m2;...\" --smax \"s1;s2;...\" --seeds \"k1;k2;...\" \"config1.yaml;config2.yaml;...\" (at least one flag)
+   or: ./run_all_cloudlab_sweep.sh --hosts <hosts.txt> --key <key> [same flags] \"config1.yaml;...\""
+# Whichever layout, the invocation below passes it straight through to
+# run_all_cloudlab.sh; the sweep itself does not care how many machines there are.
+if [[ -n "${HOSTS_FILE:-}" ]]; then
+    [[ ${#POSITIONAL[@]} -eq 1 ]] || die "$USAGE"
+    [[ -n "${KEY_ARG:-}" ]] || die "--hosts needs --key <ssh-key-path>"
+    KEY="$KEY_ARG"
+    CONFIGS_RAW="${POSITIONAL[0]}"
+    TARGET_ARGS=(--hosts "$HOSTS_FILE" --key "$KEY")
+    [[ -n "${SITE_SUBNET_ARG:-}" ]] && TARGET_ARGS+=(--site-subnet "$SITE_SUBNET_ARG")
+    TARGET_DESC="--hosts $HOSTS_FILE --key $KEY"
+else
+    [[ ${#POSITIONAL[@]} -eq 3 ]] || die "$USAGE"
+    HOST="${POSITIONAL[0]}"
+    KEY="${POSITIONAL[1]}"
+    CONFIGS_RAW="${POSITIONAL[2]}"
+    TARGET_ARGS=("$HOST" "$KEY")
+    TARGET_DESC="$HOST $KEY"
+fi
 
 [[ -n "$MODES_RAW" || -n "$SMAX_RAW" || -n "$SEEDS_RAW" ]] || die "nothing to sweep: pass --modes, --smax, and/or --seeds. $USAGE"
 [[ -f "$KEY" ]] || die "ssh key not found: $KEY"
@@ -245,7 +304,7 @@ for i in "${!COMBO_CONFIGS[@]}"; do
     echo "================================================================"
     echo "Sweep run $((i + 1))/${#COMBO_CONFIGS[@]}: $name"
     echo "================================================================"
-    if ! "$REPO_DIR/run_all_cloudlab.sh" "$HOST" "$KEY" "$name" "${COMBO_CONFIGS[$i]}" --jar "$JAR"; then
+    if ! "$REPO_DIR/run_all_cloudlab.sh" "${TARGET_ARGS[@]}" "$name" "${COMBO_CONFIGS[$i]}" --jar "$JAR"; then
         echo
         echo "Sweep stopped: '$name' failed (its partial results, if any, keep their timestamped name under runs/${name}_*)." >&2
         # Resume hints, innermost axis out: finish the failed (config, mode,
@@ -293,15 +352,15 @@ for i in "${!COMBO_CONFIGS[@]}"; do
         all_seeds_flag=""
         [[ -n "$SEEDS_RAW" ]] && all_seeds_flag=" --seeds \"$(IFS=';'; echo "${SEEDS[*]}")\""
         echo "Resume with:" >&2
-        echo "  ./run_all_cloudlab_sweep.sh $HOST $KEY$mode_flag$smax_flag$seeds_flag $cfg" >&2
+        echo "  ./run_all_cloudlab_sweep.sh $TARGET_DESC$mode_flag$smax_flag$seeds_flag $cfg" >&2
         if [[ ${#rest_smax[@]} -gt 0 ]]; then
-            echo "  ./run_all_cloudlab_sweep.sh $HOST $KEY$mode_flag --smax \"$(IFS=';'; echo "${rest_smax[*]}")\"$all_seeds_flag $cfg" >&2
+            echo "  ./run_all_cloudlab_sweep.sh $TARGET_DESC$mode_flag --smax \"$(IFS=';'; echo "${rest_smax[*]}")\"$all_seeds_flag $cfg" >&2
         fi
         if [[ ${#rest_modes[@]} -gt 0 ]]; then
-            echo "  ./run_all_cloudlab_sweep.sh $HOST $KEY --modes \"$(IFS=';'; echo "${rest_modes[*]}")\"$all_smax_flag$all_seeds_flag $cfg" >&2
+            echo "  ./run_all_cloudlab_sweep.sh $TARGET_DESC --modes \"$(IFS=';'; echo "${rest_modes[*]}")\"$all_smax_flag$all_seeds_flag $cfg" >&2
         fi
         if [[ ${#rest_cfgs[@]} -gt 0 ]]; then
-            echo "  ./run_all_cloudlab_sweep.sh $HOST $KEY$all_modes_flag$all_smax_flag$all_seeds_flag \"$(IFS=';'; echo "${rest_cfgs[*]}")\"" >&2
+            echo "  ./run_all_cloudlab_sweep.sh $TARGET_DESC$all_modes_flag$all_smax_flag$all_seeds_flag \"$(IFS=';'; echo "${rest_cfgs[*]}")\"" >&2
         fi
         exit 1
     fi

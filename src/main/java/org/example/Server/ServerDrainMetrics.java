@@ -71,6 +71,18 @@ final class ServerDrainMetrics {
     private final AtomicLongArray admissionQueueWaitBuckets = new AtomicLongArray(LATENCY_BUCKETS + 1);
     private final DoubleAdder admissionWorkNanos = new DoubleAdder();
     private final AtomicLongArray admissionWorkBuckets = new AtomicLongArray(LATENCY_BUCKETS + 1);
+    // How old a request frame already is when the event loop first reads it:
+    // the client's send stamp against this machine's clock. Split by what
+    // happened to it, because a frame that arrives already past its deadline
+    // is turned away at the door and never reaches any other counter here -
+    // it is invisible everywhere else, and it is the whole story when a node
+    // cannot drain its socket. Cross-machine clocks, so treat small values as
+    // noise and read the distribution, not any single sample.
+    private final DoubleAdder ingressAgeAcceptedNanos = new DoubleAdder();
+    private final AtomicLongArray ingressAgeAcceptedBuckets = new AtomicLongArray(LATENCY_BUCKETS + 1);
+    private final DoubleAdder ingressAgeExpiredNanos = new DoubleAdder();
+    private final AtomicLongArray ingressAgeExpiredBuckets = new AtomicLongArray(LATENCY_BUCKETS + 1);
+    private final AtomicLong ingressExpiredOnArrival = new AtomicLong();
 
     ServerDrainMetrics(int nodeId) {
         this.nodeId = nodeId;
@@ -96,6 +108,19 @@ final class ServerDrainMetrics {
     void headerAccepted() {
         headersAccepted.incrementAndGet();
         headerPermitsInFlight.incrementAndGet();
+    }
+
+    /** Age of an accepted frame when the event loop first read it. */
+    void ingressAgeAccepted(long ageNanos) {
+        ingressAgeAcceptedNanos.add(ageNanos);
+        ingressAgeAcceptedBuckets.incrementAndGet(latencyBucketOf(ageNanos));
+    }
+
+    /** Age of a frame already past its deadline on arrival, and so turned away. */
+    void ingressAgeExpired(long ageNanos) {
+        ingressExpiredOnArrival.incrementAndGet();
+        ingressAgeExpiredNanos.add(ageNanos);
+        ingressAgeExpiredBuckets.incrementAndGet(latencyBucketOf(ageNanos));
     }
 
     void headerReleased() {
@@ -264,6 +289,11 @@ final class ServerDrainMetrics {
         long[] replyBuckets = snapshotBuckets(replyOnNextLatencyBuckets);
         long[] queueWaitBuckets = snapshotBuckets(admissionQueueWaitBuckets);
         long[] workBuckets = snapshotBuckets(admissionWorkBuckets);
+        long expiredOnArrival = ingressExpiredOnArrival.getAndSet(0);
+        long[] ageAcceptedBuckets = snapshotBuckets(ingressAgeAcceptedBuckets);
+        long[] ageExpiredBuckets = snapshotBuckets(ingressAgeExpiredBuckets);
+        double ageAcceptedTotalNanos = ingressAgeAcceptedNanos.sumThenReset();
+        double ageExpiredTotalNanos = ingressAgeExpiredNanos.sumThenReset();
         double callbackTotalNanos = callbackNanos.sumThenReset();
         double replyTotalNanos = replyOnNextNanos.sumThenReset();
         double queueWaitTotalNanos = admissionQueueWaitNanos.sumThenReset();
@@ -288,10 +318,14 @@ final class ServerDrainMetrics {
                         + "AdmissionQueueDepthAtClose,AdmissionWorkersExecutingAtClose,"
                         + "AvgAdmissionQueueWaitMs,P50AdmissionQueueWaitMs,P90AdmissionQueueWaitMs,"
                         + "P99AdmissionQueueWaitMs,AvgAdmissionWorkMs,P50AdmissionWorkMs,P90AdmissionWorkMs,"
-                        + "P99AdmissionWorkMs");
+                        + "P99AdmissionWorkMs,ExpiredOnArrival,"
+                        + "AvgIngressAgeAcceptedMs,P50IngressAgeAcceptedMs,P90IngressAgeAcceptedMs,"
+                        + "P99IngressAgeAcceptedMs,AvgIngressAgeExpiredMs,P50IngressAgeExpiredMs,"
+                        + "P90IngressAgeExpiredMs,P99IngressAgeExpiredMs");
             }
             out.printf("%d,%d,%.3f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
                             + "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,"
+                            + "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,"
                             + "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f%n",
                     System.currentTimeMillis(), nodeId, intervalMs, headerCount, headerAcceptedCount,
                     headerPermitsInFlight.get(), opened, closed, cancelled, deframedCount,
@@ -316,7 +350,16 @@ final class ServerDrainMetrics {
                     averageMs(workTotalNanos, workCompleted),
                     quantileMs(workBuckets, workCompleted, 0.50),
                     quantileMs(workBuckets, workCompleted, 0.90),
-                    quantileMs(workBuckets, workCompleted, 0.99));
+                    quantileMs(workBuckets, workCompleted, 0.99),
+                    expiredOnArrival,
+                    averageMs(ageAcceptedTotalNanos, headerAcceptedCount),
+                    quantileMs(ageAcceptedBuckets, headerAcceptedCount, 0.50),
+                    quantileMs(ageAcceptedBuckets, headerAcceptedCount, 0.90),
+                    quantileMs(ageAcceptedBuckets, headerAcceptedCount, 0.99),
+                    averageMs(ageExpiredTotalNanos, expiredOnArrival),
+                    quantileMs(ageExpiredBuckets, expiredOnArrival, 0.50),
+                    quantileMs(ageExpiredBuckets, expiredOnArrival, 0.90),
+                    quantileMs(ageExpiredBuckets, expiredOnArrival, 0.99));
         } catch (IOException e) {
             System.err.println("Failed to write " + csvPath + ": " + e.getMessage());
         }

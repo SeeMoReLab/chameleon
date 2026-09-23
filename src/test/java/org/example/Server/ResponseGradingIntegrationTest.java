@@ -40,7 +40,7 @@ class ResponseGradingIntegrationTest {
 
     @BeforeAll
     static void registerSlas() {
-        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001);
+        MeasurementPlane.applyEconomics(1000, 100, 0.85, 1.0, 0.0001, 1.0e6);
         SlaRegistry.registerReadSla(40, 1, READ_SLA_MAJORITY);
         SlaRegistry.registerReadSla(40, 2, READ_SLA_FLOOR);
         SlaRegistry.registerWriteSla(40, 1, WRITE_SLA);

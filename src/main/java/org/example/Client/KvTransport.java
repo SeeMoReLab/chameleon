@@ -15,8 +15,24 @@ import io.grpc.Status;
  */
 public interface KvTransport extends AutoCloseable {
 
+    /** What produced a transport-level failure, which decides how it is counted. */
+    enum Cause {
+        /** The server answered, or the network or the server is at fault. */
+        SERVER,
+        /**
+         * The transport declined the request itself, because its own queue for that node
+         * could not deliver within the deadline. Not a broken promise by the cluster and
+         * not a value-aware refusal by admission control, so it is counted on its own.
+         * Only a transport that queues can raise it.
+         */
+        TRANSPORT_QUEUE
+    }
+
     /** Transport-level failure; the status code drives the session client's retry decision. */
-    record RpcFailure(Status status, long serverReplyEpochMs) {
+    record RpcFailure(Status status, long serverReplyEpochMs, Cause cause) {
+        public RpcFailure(Status status, long serverReplyEpochMs) {
+            this(status, serverReplyEpochMs, Cause.SERVER);
+        }
     }
 
     interface RequestHandle {
