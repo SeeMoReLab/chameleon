@@ -4,7 +4,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -31,6 +33,8 @@ import org.example.Utility.RaftLog;
 import org.example.Utility.ServerStatus.ServerCurrentStatus;
 import org.example.raft.AppendEntriesArgument;
 import org.example.raft.AppendEntriesResult;
+import org.example.raft.InstallSnapshotChunk;
+import org.example.raft.InstallSnapshotResult;
 import org.example.raft.LogEntryProto;
 import org.example.raft.RaftGrpc;
 import org.example.raft.RaftGrpc.RaftStub;
@@ -38,6 +42,7 @@ import org.example.raft.ReadIndexRequest;
 import org.example.raft.ReadIndexResult;
 import org.example.raft.RequestVoteArguments;
 import org.example.raft.RequestVoteResult;
+import org.example.raft.SnapshotEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -131,6 +136,18 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     // explicitly disables gRPC's BDP auto-tuning, which is intended: the
     // window is then a fixed, reproducible experiment parameter.
     private static volatile int REPLICATION_FLOW_CONTROL_WINDOW_BYTES = 1 << 20; // gRPC's own default
+    // Log compaction (Raft 7). The log is in memory, so it is bounded by
+    // dropping committed entries once they trail the commit index by this
+    // many; a follower that needs an entry already dropped is sent the
+    // committed KV state instead (InstallSnapshot). Compaction runs in steps
+    // of one window, so a node retains between one and two windows of
+    // committed entries plus the uncommitted suffix. Uncompacted, the log
+    // filled the default 30 GiB heap after ~145M writes and GC pauses of up to
+    // 20 s took the leadership down (CALIBRATION.md).
+    private static volatile int LOG_RETENTION_ENTRIES = 1_000_000;
+    // Chunks are cut by serialized size, well under gRPC's 4 MiB default
+    // inbound limit, so the value size never decides whether a snapshot fits.
+    private static final int SNAPSHOT_CHUNK_BYTES = 1 << 20;
     private static final int ELECTION_TIMEOUT_BASE_MS = 5000;
     private static final int ELECTION_TIMEOUT_JITTER_MS = 1000;
 
@@ -166,6 +183,9 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
         int nextSendIndex;
         long lastSendNanos;
         boolean connecting;
+        // An InstallSnapshot RPC is on its way to this follower; no
+        // AppendEntries is sent until its result has been handled.
+        boolean snapshotInFlight;
         ClientCallStreamObserver<AppendEntriesArgument> outbound;
 
         ReplicationPipeline(int followerId) {
@@ -177,6 +197,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
             nextSendIndex = confirmedNextIndex;
             term = leaderTerm;
             lastSendNanos = 0;
+            snapshotInFlight = false;
         }
     }
 
@@ -191,6 +212,19 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
         REPLICATION_FLOW_CONTROL_WINDOW_BYTES = config.server.replicationFlowControlWindowBytes;
         REPLICATION_LINGER_NANOS =
                 TimeUnit.MICROSECONDS.toNanos(Math.round(config.server.replicationLingerMs * 1000.0));
+        LOG_RETENTION_ENTRIES = config.server.logRetentionEntries;
+    }
+
+    /** Tests shrink the retention window so compaction and snapshots happen within a few hundred writes. */
+    static void applyLogRetentionForTest(int entries) {
+        if (entries <= 0) {
+            throw new IllegalArgumentException("log retention must be positive, got " + entries);
+        }
+        LOG_RETENTION_ENTRIES = entries;
+    }
+
+    static int logRetentionEntries() {
+        return LOG_RETENTION_ENTRIES;
     }
 
     /** The Raft server must announce the same window the channels assume. */
@@ -346,7 +380,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
             if (status != ServerCurrentStatus.LEADER) {
                 throw new NotLeaderException(currentLeader, "server " + serverId + " is not the leader");
             }
-            index = log.size();
+            index = log.nextIndex();
             LogEntry entry = new LogEntry(index, currentTerm.get(), key, value, opId);
             // State before index: the lock-free fast path in KvClientService
             // serves as soon as lastLogIndex covers its anchor, so the KV view
@@ -388,7 +422,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     }
 
     public int lastLogIndex() {
-        return log.size() - 1;
+        return log.lastIndex();
     }
 
     public int currentCommitIndex() {
@@ -510,11 +544,14 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
             // every stale round, and a stale empty probe would wipe it
             // outright - after which the monotonic wait registries would let
             // causal reads serve the emptied view.
+            // An entry below the compaction boundary is committed here and
+            // therefore identical to the leader's; it needs no term check.
             List<LogEntryProto> entries = args.getEntriesList();
             int skip = 0;
             while (skip < entries.size()) {
                 LogEntryProto proto = entries.get(skip);
-                if (proto.getLogIndex() < log.size() && log.get(proto.getLogIndex()).term == proto.getTerm()) {
+                int index = proto.getLogIndex();
+                if (index < log.firstIndex() || (log.contains(index) && log.get(index).term == proto.getTerm())) {
                     skip++;
                 } else {
                     break;
@@ -533,17 +570,18 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
                     kv.applyLocal(entry);
                     log.append(entry);
                 }
-                localLogWaiters.signal(log.size() - 1);
+                localLogWaiters.signal(log.lastIndex());
             }
 
             if (leadersCommitIndex > commitIndex.get()) {
-                int newCommitIndex = Math.min(leadersCommitIndex, log.size() - 1);
+                int newCommitIndex = Math.min(leadersCommitIndex, log.lastIndex());
                 // Committed view before commit index, same ordering rule.
                 for (int i = commitIndex.get() + 1; i <= newCommitIndex; i++) {
                     kv.applyCommitted(log.get(i));
                 }
                 commitIndex.set(newCommitIndex);
                 commitWaiters.signal(newCommitIndex);
+                compactIfDue();
             }
 
             return appendEntriesResult(args, true, -1);
@@ -562,18 +600,23 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
                 .build();
     }
 
-    /** Fast Raft conflict hint: first index of the conflicting follower term, or the log end. */
+    /**
+     * Fast Raft conflict hint: first index of the conflicting follower term,
+     * or the log end. Never walks into the compacted prefix: a conflict at
+     * the boundary itself hints the first retained index.
+     */
     private int conflictNextIndex(int prevLogIndex) {
-        int size = log.size();
-        if (prevLogIndex >= size) {
-            return size;
+        int end = log.nextIndex();
+        if (prevLogIndex >= end) {
+            return end;
         }
-        if (prevLogIndex < 0) {
-            return 0;
+        int firstRetained = log.firstIndex();
+        if (prevLogIndex < firstRetained) {
+            return firstRetained;
         }
         int conflictTerm = log.get(prevLogIndex).term;
         int first = prevLogIndex;
-        while (first > 0 && log.get(first - 1).term == conflictTerm) {
+        while (first > firstRetained && log.get(first - 1).term == conflictTerm) {
             first--;
         }
         return first;
@@ -585,7 +628,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
 
     // inside write lock; logIndex is the first log position being truncated
     private void truncateSuffixAndRebuildLocal(int logIndex) {
-        if (logIndex >= log.size()) {
+        if (logIndex >= log.nextIndex()) {
             // Nothing is being truncated (the common append-only path).
             return;
         }
@@ -656,13 +699,11 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     // ===== Election flow =====
 
     public int getLastLogIndex() {
-        LogEntry last = log.getLastLogEntry();
-        return last == null ? -1 : last.index;
+        return log.lastIndex();
     }
 
     public int getLastLogTerm() {
-        LogEntry last = log.getLastLogEntry();
-        return last == null ? -1 : last.term;
+        return log.lastTerm();
     }
 
     private RequestVoteArguments getRequestVoteArgumentsObject() {
@@ -827,7 +868,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     // already in writeLock
     private void reinitialiseIndexes() {
         for (int i = 0; i < NUM_OF_SERVERS; i++) {
-            nextIndex.set(i, log.size());
+            nextIndex.set(i, log.nextIndex());
             matchIndex.set(i, -1);
         }
     }
@@ -984,8 +1025,17 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
                 || status != ServerCurrentStatus.LEADER || pipeline.term != currentTerm.get()) {
             return;
         }
+        if (pipeline.snapshotInFlight) {
+            return;
+        }
         while (pipeline.inFlight.size() < MAX_INFLIGHT_REPLICATION_BATCHES_PER_FOLLOWER
                 && outbound.isReady()) {
+            if (pipeline.nextSendIndex < log.firstIndex()) {
+                // The entries this follower needs next are compacted: only
+                // the committed state can bring it forward.
+                sendSnapshot(pipeline);
+                return;
+            }
             AppendEntriesArgument request = buildNextReplicationMessage(pipeline);
             if (request == null) {
                 return;
@@ -1015,12 +1065,16 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
             if (status != ServerCurrentStatus.LEADER || pipeline.term != currentTerm.get()) {
                 return null;
             }
-            int logSize = log.size();
-            if (pipeline.nextSendIndex > logSize) {
+            int logEnd = log.nextIndex();
+            if (pipeline.nextSendIndex > logEnd) {
                 throw new IllegalStateException("replication cursor " + pipeline.nextSendIndex
-                        + " exceeds leader log size " + logSize);
+                        + " exceeds leader log end " + logEnd);
             }
-            boolean hasData = pipeline.nextSendIndex < logSize;
+            if (pipeline.nextSendIndex < log.firstIndex()) {
+                throw new IllegalStateException("replication cursor " + pipeline.nextSendIndex
+                        + " is below the first retained entry " + log.firstIndex() + "; a snapshot was due");
+            }
+            boolean hasData = pipeline.nextSendIndex < logEnd;
             long now = System.nanoTime();
             if (!hasData && (!pipeline.inFlight.isEmpty()
                     || now - pipeline.lastSendNanos < TimeUnit.MILLISECONDS.toNanos(HEARTBEAT_INTERVAL_MS))) {
@@ -1031,17 +1085,19 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
             // append, or the periodic tick. A batch at the cap is never delayed,
             // so catch-up and overload both run at full speed; only the trickle
             // case waits, and it waits at most one linger.
-            if (hasData && logSize - pipeline.nextSendIndex < MAX_ENTRIES_PER_REPLICATION_BATCH
+            if (hasData && logEnd - pipeline.nextSendIndex < MAX_ENTRIES_PER_REPLICATION_BATCH
                     && now - pipeline.lastSendNanos < REPLICATION_LINGER_NANOS) {
                 return null;
             }
 
             int start = pipeline.nextSendIndex;
             int end = hasData
-                    ? Math.min(logSize, start + MAX_ENTRIES_PER_REPLICATION_BATCH)
+                    ? Math.min(logEnd, start + MAX_ENTRIES_PER_REPLICATION_BATCH)
                     : start;
             int prevLogIndex = start - 1;
-            int prevLogTerm = prevLogIndex >= 0 ? log.get(prevLogIndex).term : -1;
+            // termAt answers for the compaction boundary too, which is where
+            // a cursor sits right after a snapshot install.
+            int prevLogTerm = prevLogIndex >= 0 ? log.termAt(prevLogIndex) : -1;
             List<LogEntryProto> protoEntries = new ArrayList<>(Math.max(0, end - start));
             for (LogEntry entry : log.entriesInRange(start, end)) {
                 protoEntries.add(LogEntryProto.newBuilder()
@@ -1093,7 +1149,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
             }
             if (!result.getIsSuccessFull()) {
                 int minimum = matchIndex.get(followerId) + 1;
-                retryFrom = Math.max(minimum, Math.min(result.getNextIndexHint(), log.size()));
+                retryFrom = Math.max(minimum, Math.min(result.getNextIndexHint(), log.nextIndex()));
                 nextIndex.set(followerId, retryFrom);
             } else {
                 int acknowledged = batch.acknowledgedIndex();
@@ -1130,6 +1186,260 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
         }
         commitIndex.set(candidate);
         commitWaiters.signal(candidate);
+        compactIfDue();
+    }
+
+    // ===== Log compaction and snapshots =====
+
+    final AtomicInteger snapshotsSent = new AtomicInteger();      // test observability
+    final AtomicInteger snapshotsInstalled = new AtomicInteger(); // test observability
+
+    /**
+     * Called with the Raft write lock held, whenever the commit index moved.
+     * Drops committed entries that trail the commit index by more than the
+     * retention window, one whole window at a time so the list shift is
+     * amortized. Entries above the commit index are never touched: they are
+     * what a conflict truncation may still need.
+     */
+    private void compactIfDue() {
+        int lowestKept = commitIndex.get() - LOG_RETENTION_ENTRIES + 1;
+        if (lowestKept - log.firstIndex() >= LOG_RETENTION_ENTRIES) {
+            log.compactThrough(lowestKept - 1);
+        }
+    }
+
+    /**
+     * Leader side, on the replication executor: ship the committed KV state
+     * to a follower whose next entry is compacted. The snapshot is the
+     * committed view at the current commit index, copied in one critical
+     * section so state and index agree; it streams in chunks and the pipeline
+     * sends nothing else until the result arrives.
+     */
+    private void sendSnapshot(ReplicationPipeline pipeline) {
+        if (pipeline.snapshotInFlight || shouldDropServerNetworkTraffic() || status != ServerCurrentStatus.LEADER
+                || stubs[pipeline.followerId] == null) {
+            return;
+        }
+        int term;
+        int lastIncluded;
+        int lastIncludedTerm;
+        Map<String, KvStore.Versioned> state;
+        lock.readLock().lock();
+        try {
+            if (status != ServerCurrentStatus.LEADER) {
+                return;
+            }
+            term = currentTerm.get();
+            lastIncluded = commitIndex.get();
+            lastIncludedTerm = lastIncluded >= 0 ? log.termAt(lastIncluded) : -1;
+            state = kv.committedSnapshot();
+        } finally {
+            lock.readLock().unlock();
+        }
+        pipeline.snapshotInFlight = true;
+        long generation = pipeline.generation;
+        int followerId = pipeline.followerId;
+        snapshotsSent.incrementAndGet();
+        StreamObserver<InstallSnapshotChunk> request = stubs[followerId].installSnapshot(new StreamObserver<>() {
+            @Override
+            public void onNext(InstallSnapshotResult result) {
+                submitReplicationTask(() -> handleSnapshotResult(followerId, generation, term, lastIncluded, result, null));
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+                submitReplicationTask(() -> handleSnapshotResult(followerId, generation, term, lastIncluded, null, throwable));
+            }
+
+            @Override
+            public void onCompleted() {
+            }
+        });
+        try {
+            InstallSnapshotChunk.Builder chunk = snapshotChunkHeader(term, lastIncluded, lastIncludedTerm);
+            int chunkBytes = 0;
+            for (Map.Entry<String, KvStore.Versioned> e : state.entrySet()) {
+                SnapshotEntry entry = SnapshotEntry.newBuilder().setKey(e.getKey())
+                        .setValue(e.getValue().value()).setIndex((int) e.getValue().index()).build();
+                int entryBytes = entry.getSerializedSize() + 4;
+                if (chunkBytes > 0 && chunkBytes + entryBytes > SNAPSHOT_CHUNK_BYTES) {
+                    request.onNext(chunk.build());
+                    chunk = snapshotChunkHeader(term, lastIncluded, lastIncludedTerm);
+                    chunkBytes = 0;
+                }
+                chunk.addEntries(entry);
+                chunkBytes += entryBytes;
+            }
+            // The last chunk may be empty; it still carries the header, which
+            // is all a snapshot of an empty store consists of.
+            request.onNext(chunk.build());
+            request.onCompleted();
+        } catch (RuntimeException e) {
+            request.onError(e);
+            handleSnapshotResult(followerId, generation, term, lastIncluded, null, e);
+        }
+    }
+
+    private InstallSnapshotChunk.Builder snapshotChunkHeader(int term, int lastIncluded, int lastIncludedTerm) {
+        return InstallSnapshotChunk.newBuilder().setLeadersTerm(term).setLeadersId(serverId)
+                .setLastIncludedIndex(lastIncluded).setLastIncludedTerm(lastIncludedTerm);
+    }
+
+    /** On the replication executor. A superseded pipeline generation ignores the result. */
+    private void handleSnapshotResult(int followerId, long generation, int term, int lastIncluded,
+            InstallSnapshotResult result, Throwable error) {
+        ReplicationPipeline pipeline = replicationPipelines[followerId];
+        if (pipeline == null || pipeline.generation != generation) {
+            return;
+        }
+        pipeline.snapshotInFlight = false;
+        if (error != null || result == null) {
+            LOG.debug("Snapshot to follower {} failed: {}", followerId, String.valueOf(error));
+            if (status == ServerCurrentStatus.LEADER && !shouldDropServerNetworkTraffic()
+                    && !replicationExecutor.isShutdown()) {
+                replicationExecutor.schedule(() -> pumpFollower(pipeline), HEARTBEAT_INTERVAL_MS, TimeUnit.MILLISECONDS);
+            }
+            return;
+        }
+        lock.writeLock().lock();
+        try {
+            if (status != ServerCurrentStatus.LEADER || term != currentTerm.get()) {
+                return;
+            }
+            if (result.getCurrentTerm() > currentTerm.get()) {
+                currentTerm.set(result.getCurrentTerm());
+                becomeFollower();
+                return;
+            }
+            if (!result.getSuccess()) {
+                return;
+            }
+            if (lastIncluded > matchIndex.get(followerId)) {
+                matchIndex.set(followerId, lastIncluded);
+                advanceCommitIndexIfPossible();
+                replicationWaiters.evaluate(this::replicaCount);
+            }
+            nextIndex.set(followerId, Math.max(nextIndex.get(followerId), lastIncluded + 1));
+        } finally {
+            lock.writeLock().unlock();
+        }
+        // Nothing was in flight while the snapshot travelled, so the cursor
+        // simply resumes right after the snapshot boundary.
+        pipeline.nextSendIndex = Math.max(pipeline.nextSendIndex, lastIncluded + 1);
+        pumpFollower(pipeline);
+    }
+
+    /**
+     * Follower side: receive a snapshot in chunks and, once complete, replace
+     * the KV views and the log by its boundary. Raft 7 lets a follower keep
+     * log entries that follow the snapshot; this one discards its whole log
+     * instead, which is always safe (the leader resends anything after the
+     * boundary) and keeps the state transition to one step.
+     */
+    @Override
+    public StreamObserver<InstallSnapshotChunk> installSnapshot(StreamObserver<InstallSnapshotResult> responseObserver) {
+        return new StreamObserver<>() {
+            private final Map<String, KvStore.Versioned> state = new HashMap<>();
+            private boolean headerSeen;
+            private boolean finished;
+            private int leadersTerm = -1;
+            private int leadersId = -1;
+            private int lastIncluded = -1;
+            private int lastIncludedTerm = -1;
+
+            private void finish(InstallSnapshotResult result) {
+                finished = true;
+                synchronized (responseObserver) {
+                    responseObserver.onNext(result);
+                    responseObserver.onCompleted();
+                }
+            }
+
+            @Override
+            public void onNext(InstallSnapshotChunk chunk) {
+                if (finished) {
+                    return;
+                }
+                if (shouldDropServerNetworkTraffic()) {
+                    finished = true;
+                    responseObserver.onError(Status.UNAVAILABLE
+                            .withDescription("Node is configured as failed: snapshot dropped").asRuntimeException());
+                    return;
+                }
+                if (chunk.getLeadersTerm() < currentTerm.get()) {
+                    finish(InstallSnapshotResult.newBuilder().setCurrentTerm(currentTerm.get()).setSuccess(false).build());
+                    return;
+                }
+                if (!headerSeen) {
+                    headerSeen = true;
+                    leadersTerm = chunk.getLeadersTerm();
+                    leadersId = chunk.getLeadersId();
+                    lastIncluded = chunk.getLastIncludedIndex();
+                    lastIncludedTerm = chunk.getLastIncludedTerm();
+                } else if (chunk.getLeadersTerm() != leadersTerm || chunk.getLastIncludedIndex() != lastIncluded
+                        || chunk.getLastIncludedTerm() != lastIncludedTerm || chunk.getLeadersId() != leadersId) {
+                    finished = true;
+                    responseObserver.onError(Status.INVALID_ARGUMENT
+                            .withDescription("snapshot chunks disagree on their header").asRuntimeException());
+                    return;
+                }
+                for (SnapshotEntry entry : chunk.getEntriesList()) {
+                    state.put(entry.getKey(), new KvStore.Versioned(entry.getValue(), entry.getIndex()));
+                }
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+                finished = true;
+            }
+
+            @Override
+            public void onCompleted() {
+                if (finished) {
+                    return;
+                }
+                if (!headerSeen) {
+                    finished = true;
+                    responseObserver.onError(Status.INVALID_ARGUMENT
+                            .withDescription("snapshot stream completed without a chunk").asRuntimeException());
+                    return;
+                }
+                InstallSnapshotResult result;
+                lock.writeLock().lock();
+                try {
+                    if (leadersTerm > currentTerm.get()) {
+                        currentTerm.set(leadersTerm);
+                        becomeFollower();
+                    }
+                    if (leadersTerm < currentTerm.get()) {
+                        result = InstallSnapshotResult.newBuilder().setCurrentTerm(currentTerm.get())
+                                .setSuccess(false).build();
+                    } else {
+                        currentLeader = leadersId;
+                        if (status != ServerCurrentStatus.FOLLOWER) {
+                            becomeFollower();
+                        }
+                        startTheElectionTimer();
+                        // A snapshot at or below our commit index carries
+                        // nothing we lack; the leader's next AppendEntries
+                        // will find its prevLogIndex matched.
+                        if (lastIncluded > commitIndex.get()) {
+                            kv.installSnapshot(state);
+                            log.resetToSnapshot(lastIncluded, lastIncludedTerm);
+                            commitIndex.set(lastIncluded);
+                            localLogWaiters.signal(lastIncluded);
+                            commitWaiters.signal(lastIncluded);
+                            snapshotsInstalled.incrementAndGet();
+                        }
+                        result = InstallSnapshotResult.newBuilder().setCurrentTerm(currentTerm.get())
+                                .setSuccess(true).build();
+                    }
+                } finally {
+                    lock.writeLock().unlock();
+                }
+                finish(result);
+            }
+        };
     }
 
     private void handleReplicationStreamClosed(int followerId, long generation, Throwable error) {

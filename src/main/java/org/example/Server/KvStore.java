@@ -1,5 +1,7 @@
 package org.example.Server;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.example.Utility.LogEntry;
@@ -63,5 +65,26 @@ public final class KvStore {
         for (LogEntry entry : survivingUncommittedSuffix) {
             applyLocal(entry);
         }
+    }
+
+    /**
+     * Copy of the committed view for a snapshot. Consistent with a commit
+     * index only when taken in the same critical section that reads it,
+     * because both advance together under the owner's write lock.
+     */
+    public Map<String, Versioned> committedSnapshot() {
+        return new HashMap<>(committed);
+    }
+
+    /**
+     * Replace both views by a leader's committed snapshot. The owner resets
+     * the log alongside, so there is no uncommitted suffix to layer on top:
+     * the local view equals the committed view until the leader resumes.
+     */
+    public void installSnapshot(Map<String, Versioned> snapshot) {
+        committed.clear();
+        committed.putAll(snapshot);
+        local.clear();
+        local.putAll(snapshot);
     }
 }

@@ -138,6 +138,8 @@ This builds the project and launches one `ServerNode` process per Raft node plus
 
 Each Raft node runs in its own OS process (`ServerNode`); the workload driver (`WorkloadDriver`) runs in another and controls the cluster over an admin gRPC service.
 
+The Raft log is in memory and bounded: committed entries are compacted once they trail the commit index by `server.logRetentionEntries`, and a follower whose next entry is already compacted is brought forward with the leader's committed KV state (an InstallSnapshot stream) instead of the missing entries. Without the bound the log filled the JVM's default heap about 1,200 s into the day sequence and the GC pauses cost the leadership (CALIBRATION.md).
+
 It automatically:
 
 * Starts multiple gRPC servers
@@ -349,8 +351,6 @@ The framework automatically generates CSV files such as:
 | `incoming_transaction_rate_global.csv` | global injection rate |
 
 These files are later used for plotting and analysis.
-
-For framed transport queueing and capacity diagnosis, run CloudLab with `--diagnostics`. See [Transport diagnostics](TRANSPORT_DIAGNOSTICS.md) for the timing/queue CSVs, event-loop probes, TCP/netem and clock snapshots, and JVM CPU recordings.
 
 ---
 

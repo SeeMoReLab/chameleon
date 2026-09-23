@@ -359,6 +359,8 @@ were discarded.
 
 **Machine clocks are checked before a distributed run starts.** The servers compute a request's age and remaining deadline from the client's wall-clock stamps against their own clock, so the machines have to agree to well under a deadline. On a fresh allocation one server booted 228 ms fast, and chrony was slewing it back at roughly 30 ms per five minutes. That node expired 605,000 of the 627,000 requests/s it saw on arrival, and because an instant rejection looks like the fastest replica it drew most of the reads to itself; the retries reached the other servers with their deadlines already spent. Writes, which go to the leader, were unaffected, so the three local sMax runs that hit it completed with 83% violations and served throughput that scaled with sMax - a plausible-looking result. `run_all_cloudlab.sh` now refuses to start when any machine is more than 2 ms off NTP time, `setup_cloudlab.sh` steps the clock after provisioning, and those three runs were discarded and repeated.
 
+**The Raft log is bounded.** It is in memory and was never compacted, so every admitted write stayed on the heap of every node for the whole run: a `LogEntry` (index, term, key, value, opId) per write, about 200 to 300 bytes. The servers run with the JVM's ergonomic maximum heap, 30 GiB on the 188 GB CloudLab machines, which is about 145 million entries. In the first day-sequence sweep on the shipping configuration every Java-store run reached that point between 1,060 s and 1,770 s, depending on how many writes the arm admitted: the 100 ms occupancy stream then shows stop-the-world pauses of about 1 s on all five nodes in the same minute (identical logs, identical heaps), growing to 2 to 20 s on the leader, against a 5 s election timeout. Leadership was lost for the first time after 143.5M to 145.5M served writes on local and regional and 119M to 123M on global, in every one of the nine runs that lost it; the other six ended below that count. No election happened in any run before the pauses began, so overload alone never destabilised Raft. The 15 Java-store runs are void, the 15 mongod runs (capped oplog) are not. `RaftLog` now compacts committed entries behind a retention window (`server.logRetentionEntries`, 1,000,000) and a follower whose next entry is compacted is restored from the leader's committed KV state over a new InstallSnapshot stream.
+
 ## Known gaps
 
 - **mongod repeats are thin.** Global C now has two runs and they agree (see above). Of
@@ -373,14 +375,17 @@ were discarded.
   dwell, while every read class was unchanged. Run-to-run variance near such a threshold
   is bimodal, not noise, so repeats there produce a distribution whose mean describes
   neither mode.
-- **Neither store has been run through the full day sequence** on any arm. All calibration
-  is from steady dwells, so nothing is known about the price's behaviour across phase
-  transitions - oscillation on the HolidayPlateau, recovery after Collapse.
+- **The Java store's day-sequence runs on the shipping configuration are void** (the log
+  growth above) and must be repeated with the bounded log. Their first 1,000 s are sound and
+  already show the arm ordering chameleon > pileus > strongest > weakest before any node
+  was affected (local: -15%, -19%, -36% against chameleon before Payday). The 15 mongod runs
+  stand.
 - **The 3x cap is measured at 2.5C on local only.** Global at 1C shows the price doing the
   admission (scorer 9.8%, cap 0.1%), but neither regional nor global has been driven to 2.5C
   under the shipping cap, so whether it regulates or saturates there rests on the ratio
   argument. Every sweep run reports `HardCapRejected` and lambda per phase, so a problem
   will surface in the experiment data without a separate calibration run.
-- **The 15-run day-sequence sweep is void** and must be redone: local's chameleon and
-  chameleonPileus runs were corrupted by the price overflow from 1,095 s onward, and all
-  15 ran under the 60,000 cap.
+- **Log compaction has not been exercised on the cluster.** It is covered by unit tests and
+  a 3-node integration test in which a partitioned follower is restored from a snapshot,
+  but no CloudLab run has yet gone past the old 145M-entry point with the bound in place.
+  The first repeated day sequence is that measurement.

@@ -135,6 +135,19 @@ server:
   maxEntriesPerReplicationBatch: 4000
   # Maximum unacknowledged replication messages per follower.
   maxInflightReplicationBatchesPerFollower: 16
+  # Committed log entries kept behind the commit index before they are
+  # compacted away (Raft 7). The Raft log is in memory and was unbounded: it
+  # filled the JVM's default 30 GiB heap after about 145M admitted writes,
+  # around 1,200 s into the day sequence, and the resulting GC pauses (up to
+  # 20 s against a 5 s election timeout) took the leadership down for the rest
+  # of the run (CALIBRATION.md). A follower whose next entry is already
+  # compacted receives the leader's committed KV state (InstallSnapshot)
+  # instead, so this only needs to cover ordinary follower lag: 16 in-flight
+  # batches of 4,000 entries is 64,000, and one stream restart resends from
+  # the last acknowledged index. 1,000,000 is 6 s of writes at the
+  # replication budget and about 300 MB per node at 2x (compaction runs one
+  # window at a time).
+  logRetentionEntries: 1000000
   # HTTP/2 flow-control window on the server-server path, announced by the
   # Raft server and assumed by the replication channels. Sized to hold the
   # full batch window in bytes: 32 batches x 4000 entries x ~60 B/entry

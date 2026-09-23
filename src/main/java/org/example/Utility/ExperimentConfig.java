@@ -104,6 +104,13 @@ public final class ExperimentConfig {
         // time and a low-latency topology batches far worse than a distant one.
         // A full batch never waits. 0 disables it (the self-clocked behaviour).
         public Double replicationLingerMs;
+        // Committed log entries a node keeps behind its commit index before
+        // compacting them away (Raft 7). The log is in memory; without a bound
+        // it filled the heap after ~145M writes and GC pauses cost the
+        // leadership. A follower that needs a compacted entry is sent the
+        // committed KV state instead, so this only has to cover a follower's
+        // ordinary lag (in-flight batches plus one stream restart).
+        public Integer logRetentionEntries;
         public Boolean followerLinearizableReads; // followers serve LIN via a leader read-index round (all modes)
         public Double histogramDecay;      // service-time histogram decay per 100 ms refresh tick, in (0, 1)
     }
@@ -643,6 +650,7 @@ public final class ExperimentConfig {
                 "server.maxInflightReplicationBatchesPerFollower");
         requirePositive(server.replicationFlowControlWindowBytes,
                 "server.replicationFlowControlWindowBytes");
+        requirePositive(server.logRetentionEntries, "server.logRetentionEntries");
         require(server.replicationLingerMs, "server.replicationLingerMs");
         if (!(server.replicationLingerMs >= 0) || !Double.isFinite(server.replicationLingerMs)) {
             throw new IllegalArgumentException("server.replicationLingerMs must be a non-negative finite"

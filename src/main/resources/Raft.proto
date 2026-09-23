@@ -17,6 +17,11 @@ service Raft {
   // asks the leader for a confirmed read index, then waits for its own commit
   // index to reach it before serving from local committed state.
   rpc ConfirmReadIndex(ReadIndexRequest) returns (ReadIndexResult);
+  // Log compaction (Raft 7): the log is in memory and bounded, so a follower
+  // whose next index has fallen below the leader's first retained entry is
+  // brought up to date with the leader's committed KV state instead of the
+  // missing entries. Chunked so no message exceeds gRPC's inbound limit.
+  rpc InstallSnapshot(stream InstallSnapshotChunk) returns (InstallSnapshotResult);
 }
 
 // Log entries are pure KV writes. Reads never enter the log: linearizable
@@ -68,6 +73,31 @@ message ReadIndexResult {
   bool success = 1;    // false: the callee is not the leader (see leaderId)
   int32 readIndex = 2; // leader's commit index, confirmed by a majority round
   int32 leaderId = 3;  // callee's best-known leader when success is false; -1 = unknown
+}
+
+// One key of the committed KV view, with the log index of the write that
+// produced it (KvStore.Versioned): the index is what grading and the causal
+// session frontier compare against, so it travels with the value.
+message SnapshotEntry {
+  string key = 1;
+  string value = 2;
+  int32 index = 3;
+}
+
+// Every chunk repeats the header fields so the follower can validate the
+// leader's term on the first chunk and knows which snapshot the entries
+// belong to; the stream's completion marks the snapshot complete.
+message InstallSnapshotChunk {
+  int32 leadersTerm = 1;
+  int32 leadersId = 2;
+  int32 lastIncludedIndex = 3;  // commit index the snapshot reflects
+  int32 lastIncludedTerm = 4;   // term of the entry at lastIncludedIndex
+  repeated SnapshotEntry entries = 5;
+}
+
+message InstallSnapshotResult {
+  int32 currentTerm = 1;
+  bool success = 2;  // false only when the leader's term is stale
 }
 
 // ============================================================
