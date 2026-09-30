@@ -8,7 +8,8 @@
 #    or: ./setup_cloudlab.sh --hosts <hosts.txt> --key <ssh-key-path> [--mongodb]
 #
 # The second form provisions every machine in a distributed allocation (see
-# cloudlab_hosts.sh for the file format).
+# cloudlab_hosts.sh for the file format), all machines at once; the MongoDB
+# build environment below follows on one machine.
 #
 # --mongodb additionally provisions everything the MongoDB transport needs
 # (MONGODB_PORT.md): the build dependencies, a checkout of mongodb/mongo at
@@ -58,6 +59,7 @@ if [[ -n "$HOSTS_FILE" ]]; then
     [[ -z "$HOST" ]] || die "pass either a positional host or --hosts, not both"
     hosts_load "$HOSTS_FILE"
     TARGETS=("${ALL_SSH[@]}")
+    TARGET_LAN=("${ALL_LAN[@]}")
     BUILDER="${SERVER_SSH[0]}"
     echo "Provisioning ${#TARGETS[@]} machine(s) from $HOSTS_FILE:"
     hosts_describe
@@ -66,14 +68,18 @@ else
     [[ -n "$HOST" ]] || die "usage: ./setup_cloudlab.sh <user@host> <ssh-key-path> [--mongodb]
    or: ./setup_cloudlab.sh --hosts <hosts.txt> --key <ssh-key-path> [--mongodb]"
     TARGETS=("$HOST")
+    TARGET_LAN=("")
     BUILDER="$HOST"
 fi
 
 SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30)
 
-for TARGET in "${TARGETS[@]}"; do
-echo "Provisioning $TARGET..."
-ssh "${SSH_OPTS[@]}" "$TARGET" bash -s <<'REMOTE'
+# The base provisioning is the same on every machine and none of it depends on
+# another machine, so the hosts are provisioned concurrently: one ssh per host
+# in the background, its output prefixed with the host name, and the script
+# fails at the end naming every host whose provisioning failed. apt's own lock
+# is per machine, so concurrency across machines is safe.
+read -r -d '' PROVISION_SCRIPT <<'REMOTE' || true
 set -euo pipefail
 sudo apt-get update -q
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
@@ -84,13 +90,50 @@ mkdir -p "$HOME/tuneable/runs"
 # their own clock, so step it now; run_all_cloudlab.sh refuses to start on a
 # machine that is still off.
 sudo chronyc makestep >/dev/null
-echo
-echo "Installed:"
-java -version 2>&1 | head -1
-tmux -V
-tc -V | head -1
+# Jumbo frames on the experiment interface. The delay emulation queues packets,
+# not bytes (run_all_cloudlab.sh, NETEM_LIMIT), so the packet count per byte
+# decides when a link drops: at MTU 1500 a 12 MB/s replication stream on a
+# 115 ms link keeps about 920 packets queued against the 1,000 limit and drops
+# under any burst, which stalled the far follower's stream and cost the leader
+# its seat six times in one run. At 9000 the same stream queues about 160. The
+# Clemson nodes came up at 9000; the Utah c6525-25g image comes up at 1500. The
+# setting does not survive a reboot, and run_all_cloudlab.sh refuses to start
+# on an interface that is not at 9000. Single-host runs have no LAN address and
+# use loopback, so LAN_IP is empty and this is skipped.
+if [[ -n "${LAN_IP:-}" ]]; then
+    IFACE="$(ip -o -4 addr show | awk -v a="$LAN_IP" '$4 ~ "^"a"/" {print $2; exit}')"
+    [[ -n "$IFACE" ]] || { echo "ERROR: no interface carries $LAN_IP on $(hostname)" >&2; exit 1; }
+    sudo ip link set dev "$IFACE" mtu 9000
+    MTU="$(cat "/sys/class/net/$IFACE/mtu")"
+    [[ "$MTU" == 9000 ]] || { echo "ERROR: $IFACE on $(hostname) is at MTU $MTU after setting 9000" >&2; exit 1; }
+    echo "experiment interface $IFACE ($LAN_IP): MTU $MTU"
+fi
+echo "Installed: $(java -version 2>&1 | head -1); $(tmux -V); $(tc -V | head -1)"
 REMOTE
+
+# provision_host <user@host> <lan-ip>: runs PROVISION_SCRIPT there with the
+# host's experiment LAN address (empty for a single host), every output line
+# prefixed with the host's short name; exits with ssh's status.
+provision_host() {
+    local target="$1" lan="$2"
+    local short="${target#*@}"
+    short="${short%%.*}"
+    ssh "${SSH_OPTS[@]}" "$target" LAN_IP="$lan" bash -s <<<"$PROVISION_SCRIPT" 2>&1 | sed -u "s/^/[$short] /"
+    return "${PIPESTATUS[0]}"
+}
+
+echo "Provisioning ${#TARGETS[@]} machine(s) concurrently..."
+PIDS=()
+for i in "${!TARGETS[@]}"; do
+    provision_host "${TARGETS[$i]}" "${TARGET_LAN[$i]}" &
+    PIDS+=("$!")
 done
+FAILED=()
+for i in "${!TARGETS[@]}"; do
+    wait "${PIDS[$i]}" || FAILED+=("${TARGETS[$i]}")
+done
+[[ ${#FAILED[@]} -eq 0 ]] || die "provisioning failed on ${#FAILED[@]} machine(s): ${FAILED[*]} (their output is prefixed above)"
+echo "Base provisioning done on ${#TARGETS[@]} machine(s)."
 
 if [[ "$WITH_MONGODB" == 1 ]]; then
     echo
@@ -99,9 +142,11 @@ if [[ "$WITH_MONGODB" == 1 ]]; then
 set -euo pipefail
 # The bazel build fetches MongoDB's own hermetic compiler toolchain, so only
 # the headers it links against and python are needed on the host. gcc compiles
-# the small LD_PRELOAD source-binding shim (bindsrc.c) beside mongod.
+# the small LD_PRELOAD source-binding shim (bindsrc.c) beside mongod. libssl-dev
+# is for the vendored s2n (openssl/aes.h); the Clemson image shipped it, the
+# Utah image does not.
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-    git python3 libcurl4-openssl-dev liblzma-dev gcc
+    git python3 libcurl4-openssl-dev libssl-dev liblzma-dev gcc
 
 # The root partition of a CloudLab image is about 64 GB and a full mongod
 # build with bazel's sandboxing does not fit beside the OS. The rest of the

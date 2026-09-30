@@ -252,6 +252,7 @@ class ExperimentConfigTest {
         // decides whether the controller can reach uTarget at all: at 18.75x
         // it saturated at lambdaMax under overload, and at 1.5x the cap did all
         // the admission while the price sat on its floor.
+        // The shipping local values on the Utah c6525-25g nodes (CALIBRATION.md, "Hardware").
         assertEquals(9600, config.server.ingressHardCapInFlight);
         assertEquals(3200, config.server.sMax);
         assertEquals(3 * config.server.sMax, config.server.ingressHardCapInFlight, 1e-9);

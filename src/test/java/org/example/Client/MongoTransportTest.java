@@ -38,7 +38,7 @@ class MongoTransportTest {
     void envelopeCarriesIdentityFrontierAndTarget() {
         KvRequest request = read(new BsonTimestamp(1700000000, 9).getValue())
                 .setTargetReadLevel(ReadLevel.CAUSAL_MAJORITY).setWaitBoundMs(80).build();
-        Document env = MongoTransport.envelope(request);
+        Document env = MongoTransport.envelope(request, 0.0);
         assertEquals(1, env.getInteger("app"));
         assertEquals(2, env.getInteger("sla"));
         assertEquals(12.5, env.getDouble("rtt"));
@@ -49,8 +49,21 @@ class MongoTransportTest {
     }
 
     @Test
+    void envelopeRttChargesThePoolsCheckoutWait() {
+        // The client grades from dispatch, before the pool wait; mongod starts its
+        // clock at arrival, after it. The envelope's rtt is what the scorer subtracts
+        // from every rung, so the wait the request is about to spend on this pool
+        // rides along with the network estimate.
+        KvRequest request = read(-1).build();
+        assertEquals(12.5, MongoTransport.envelope(request, 0.0).getDouble("rtt"));
+        assertEquals(100.0, MongoTransport.envelope(request, 87.5).getDouble("rtt"));
+        assertThrows(IllegalArgumentException.class, () -> MongoTransport.envelope(request, -1.0));
+        assertThrows(IllegalArgumentException.class, () -> MongoTransport.envelope(request, Double.NaN));
+    }
+
+    @Test
     void noFrontierAndNoTargetAreOmitted() {
-        Document env = MongoTransport.envelope(read(-1).build());
+        Document env = MongoTransport.envelope(read(-1).build(), 0.0);
         assertFalse(env.containsKey("frontier"));
         assertFalse(env.containsKey("target"));
     }
@@ -191,13 +204,13 @@ class MongoTransportTest {
     void writeCommandBoundsTheAcknowledgmentWaitWithoutTrippingTheDriver() {
         KvRequest write = KvRequest.newBuilder().setRequestId(9).setApplicationId(1).setSlaId(1).setIsRead(false)
                 .setKey("user1").setValue("v").setRequestedWriteConcern(3).build();
-        Document hooksOn = MongoTransport.updateCommand(write, 750, "kv", true);
+        Document hooksOn = MongoTransport.updateCommand(write, 750, 0.0, "kv", true);
         assertFalse(hooksOn.containsKey("maxTimeMS"),
                 "a write never carries maxTimeMS: its expiry inside the replication wait marks the primary UNKNOWN");
         assertEquals(new Document("w", 3), hooksOn.get("writeConcern", Document.class),
                 "with the hooks on the server bounds the wait from the envelope");
 
-        Document hooksOff = MongoTransport.updateCommand(write, 750, "kv", false);
+        Document hooksOff = MongoTransport.updateCommand(write, 750, 0.0, "kv", false);
         assertFalse(hooksOff.containsKey("maxTimeMS"), "without the hooks a write never carries maxTimeMS");
         assertEquals(new Document("w", 3).append("wtimeout", 750L), hooksOff.get("writeConcern", Document.class),
                 "the remaining deadline bounds the acknowledgment wait instead");

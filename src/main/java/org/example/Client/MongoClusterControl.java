@@ -165,6 +165,31 @@ public final class MongoClusterControl implements AutoCloseable {
         return new Document("read", read).append("write", write);
     }
 
+    /**
+     * The server parameters a run pushes, in push order. Every knob the two stores share is
+     * here so a mongod run and a Java run differ only in the store: the hard cap
+     * (server.ingressHardCapInFlight) and the price ceiling (chameleon.lambdaMax) included.
+     * The ceiling goes before the floor: the parameters land one at a time, ExperimentConfig
+     * has already required lambdaMax > lambdaMin, and a new ceiling is consistent with the old
+     * floor whenever it is consistent with the new one, so the pair is never inverted in
+     * between.
+     */
+    public static Document serverParameters(ExperimentConfig config, ClientMode mode) {
+        return new Document("chameleonEnabled", true)
+                .append("chameleonServerDecision", mode.chameleonDecision())
+                .append("chameleonSMax", config.server.sMax)
+                .append("chameleonHardCapInFlight", config.server.ingressHardCapInFlight)
+                .append("chameleonReplicationBudgetPerSecond", config.server.replicationBudgetPerSecond)
+                .append("chameleonMaxWaitMs", config.server.maxWaitMs)
+                .append("chameleonControlIntervalMs", config.chameleon.controlIntervalMs)
+                .append("chameleonUTarget", config.chameleon.uTarget)
+                .append("chameleonEta", config.chameleon.eta)
+                .append("chameleonLambdaMax", config.chameleon.lambdaMax)
+                .append("chameleonLambdaMin", config.chameleon.lambdaMin)
+                .append("chameleonHistogramDecay", config.server.histogramDecay)
+                .append("chameleonSlaTable", slaTableDocument(config));
+    }
+
     /** Every Chameleon parameter the config expresses, pushed to every node; fails on the first refusal. */
     public void applyServerParameters(ClientMode mode) {
         if (!config.mongodbServerHooks()) {
@@ -174,17 +199,7 @@ public final class MongoClusterControl implements AutoCloseable {
                     + " no parameters pushed to " + nodeClients.length + " nodes");
             return;
         }
-        Document parameters = new Document("chameleonEnabled", true)
-                .append("chameleonServerDecision", mode.chameleonDecision())
-                .append("chameleonSMax", config.server.sMax)
-                .append("chameleonReplicationBudgetPerSecond", config.server.replicationBudgetPerSecond)
-                .append("chameleonMaxWaitMs", config.server.maxWaitMs)
-                .append("chameleonControlIntervalMs", config.chameleon.controlIntervalMs)
-                .append("chameleonUTarget", config.chameleon.uTarget)
-                .append("chameleonEta", config.chameleon.eta)
-                .append("chameleonLambdaMin", config.chameleon.lambdaMin)
-                .append("chameleonHistogramDecay", config.server.histogramDecay)
-                .append("chameleonSlaTable", slaTableDocument(config));
+        Document parameters = serverParameters(config, mode);
         for (int node = 0; node < nodeClients.length; node++) {
             for (String name : parameters.keySet()) {
                 Document command = new Document("setParameter", 1).append(name, parameters.get(name));

@@ -55,18 +55,20 @@ server:
   # level of the same view (reads) or acks with the replication reached so
   # far (writes). Client-sent wait bounds are clamped to this too.
   maxWaitMs: 500
-  # Most requests the ingress event loop holds before refusing new ones. Was
-  # derived as 1.5 * sMax; separated because a calibration probe pins sMax far
-  # above reach to silence the price, and that removed this backstop with it,
-  # letting the receive queue grow until requests arrived already dead. Set to
-  # 1.5 * sMax here, which is what the derivation produced.
-  ingressHardCapInFlight: 360
+  # Most requests mongod holds in flight before refusing a new one on arrival,
+  # in every arm; pushed as chameleonHardCapInFlight. 3 * sMax, the Java
+  # store's rule (see config_local.yaml on why 3x and not 1.5x: at 1.5x the cap
+  # does all the admission and the price never engages). Until the parameter
+  # existed the patched mongod applied a hard-coded 1.5 * sMax and this line
+  # had no effect; every mongod run before 2026-09-25 sat on that cap, which
+  # the fixed arms reached for up to a quarter of the run and the chameleon
+  # arms for under 70 of 18,600 samples.
+  ingressHardCapInFlight: 540
   # Occupancy slot budget: the concurrency this node is allowed to carry.
   # Utilization u = slot-time / (sMax * interval), and uTarget holds the mean at
-  # 85% of the budget. Pushed to mongod as chameleonSMax; note that
-  # ingressHardCapInFlight and replicationLingerMs in this file are NOT pushed
-  # and have no effect on a mongod run - mongod uses its own replication, and
-  # its concurrency is bounded by the driver pool and WiredTiger tickets.
+  # 85% of the budget. Pushed to mongod as chameleonSMax. replicationLingerMs
+  # in this file is NOT pushed and has no effect on a mongod run: mongod uses
+  # its own replication.
   #
   # Calibrated by sweeping sMax at C = 120,000 and reading realized profit, with
   # a 2.5C rung in the same run so the overload behaviour is measured rather than
@@ -83,7 +85,11 @@ server:
   # local: 120 earns 99.8% of the best profit at C and is the outright best
   # at 2.5C (2,100,250/s against 1,835,404 at 500), with lambda reaching 3.0
   # in overload - 30,000x its floor. Unchanged from the previous value.
-  sMax: 120
+  # Utah c6525-25g (2026-09-24, unchanged at MTU 9000): 180, cap 540 (3x). The dwell probe at
+  # C = 90,000 put u near 0.6 here on every topology, and the values keep
+  # sMax increasing with delay. The Clemson r6615 value was 120 at C = 120,000;
+  # the calibration text above is Clemson's. CALIBRATION.md, "Hardware".
+  sMax: 180
   # Leader-side write admission: entries per second charged one per admitted
   # write, refilled continuously, never returned. Calibrated from the
   # measured max commit rate, ~80% of it. Universal. mongod: the primary
@@ -91,7 +97,11 @@ server:
   # topology (runs/cal-writes1000_20260917_000214, weakest arm, A1 writes
   # only, pool cap 1,000) and less above that as the occupancy backstop took
   # over; 0.8 x 105,800 = 85,000.
-  replicationBudgetPerSecond: 85000
+  # Utah c6525-25g (2026-09-24): 60,000. Same probe on these nodes (weakest arm, A1 writes
+  # only, local topology): served tracked 59,323/s at 59,369 offered and plateaued at 67,800
+  # to 74,300/s from 79,000 up; 0.81 x 74,300, rounded for a round number. The Clemson r6615 value was 85,000 (ceiling
+  # 105,800, the text above). CALIBRATION.md, "Hardware".
+  replicationBudgetPerSecond: 60000
   # Maximum entries carried by one ordered message on a leader-to-follower
   # replication stream.
   maxEntriesPerReplicationBatch: 4000
@@ -187,6 +197,13 @@ chameleon:
   # decay is exp(eta * (0 - uTarget)) per interval, so returning to the floor
   # from 1e6 takes about 27 s, against roughly 460 s from the 1e167 the
   # regional topology reached and never from infinity.
+  #
+  # Pushed to mongod as chameleonLambdaMax, before chameleonLambdaMin so the
+  # pair is never inverted between the two setParameter calls. The patched
+  # mongod had no ceiling until 2026-09-25: the day sequence took its price to
+  # 1e184 (pileus) and 1e271 (strongest) on the global topology, inert in those
+  # arms because the client decides there, and the chameleon arms peaked below
+  # 0.5, so no result moved, but a run 15% longer would have reached infinity.
   lambdaMax: 1.0e6
 
 # Mode-independent client mechanics.
@@ -575,9 +592,15 @@ workload:
       - { applicationId: 3, type: write, slaId: 1, weight: 4 }
       - { applicationId: 4, type: read,  slaId: 1, weight: 25 }
       - { applicationId: 4, type: write, slaId: 1, weight: 10 }
+  # Rates are fractions of C. On the Utah c6525-25g nodes C = 90,000: the
+  # single client machine binds on the local topology, tracking 99.9% of
+  # 90,000 with 0.0% violations and 96.4% of 105,000 with 3.8%, while the
+  # servers stay nearly idle. The text below is the Clemson r6615 calibration
+  # (C = 120,000); CALIBRATION.md, "Hardware", keeps both sets of values.
+  #
   # The day sequence (EXPERIMENT.md): one continuous run, sessions persist
   # throughout so history and lag carry across segments. Rates are fractions of
-  # C = 120,000, common to all three topologies because C is a property of the
+  # C, common to all three topologies because C is a property of the
   # workload, not of the deployment - only sMax is per-topology. The cluster is
   # provisioned for ordinary peak plus headroom, not for the flash sale: normal
   # sits at 0.5C and the sale day exceeds C.
@@ -602,43 +625,43 @@ workload:
   phases:
     - name: WarmUp          # warm up the cluster
       durationSeconds: 30
-      totalTPS: 60000      # 0.5C
+      totalTPS: 45000      # 0.5C
       mix: normal
     - name: NormalDay       # baseline: price on its floor, upgrades free
       durationSeconds: 300
-      totalTPS: 60000      # 0.5C
+      totalTPS: 45000      # 0.5C
       mix: normal
     - name: HolidayPlateau  # sustained lift; equilibrium, where oscillation would appear
       durationSeconds: 300
-      totalTPS: 96000      # 0.8C
+      totalTPS: 72000      # 0.8C
       mix: holiday
     - name: SaleDay         # Prime Day scale: rate and value rise together
       durationSeconds: 300
-      totalTPS: 216000     # 1.8C
+      totalTPS: 162000     # 1.8C
       mix: saleDay
     - name: PreFlash        # login surge; write-heavy A3 drives lag up before the burst
       durationSeconds: 120
-      totalTPS: 120000     # 1C
+      totalTPS: 90000     # 1C
       mix: preFlash
     - name: Flash           # ~60% must be refused; floor forbids downgrading
       durationSeconds: 60
-      totalTPS: 300000     # 2.5C
+      totalTPS: 225000     # 2.5C
       mix: flash
     - name: Collapse        # load vanishes: does the price come down promptly
       durationSeconds: 120
-      totalTPS: 84000      # 0.7C
+      totalTPS: 63000      # 0.7C
       mix: collapse
     - name: Payday          # composition shifts, volume barely does; the valuable tenant surges
       durationSeconds: 300
-      totalTPS: 72000      # 0.6C
+      totalTPS: 54000      # 0.6C
       mix: payday
     - name: ReturnToNormal  # recovery, compared directly against the opening segment
       durationSeconds: 300
-      totalTPS: 60000      # 0.5C
+      totalTPS: 45000      # 0.5C
       mix: normal
     - name: CoolDown        # cool down to handle shutdown delays
       durationSeconds: 30
-      totalTPS: 60000      # 0.5C
+      totalTPS: 45000      # 0.5C
       mix: normal
 # MongoDB transport (MONGODB_PORT.md). The five mongods listen on this port on
 # their own cluster.serverHosts addresses (the CloudLab runner rewrites those to

@@ -125,11 +125,21 @@ server:
   #
   # local: 3,200 is the profit peak (10.63M/s, two runs 1.7% apart), 99.0% of
   # offered writes admitted, 63% of them at majority.
+  # Utah c6525-25g at MTU 9000 (2026-09-24): 3,200, cap 9,600 (3x). Dwell probes at
+  # C = 500,000 were flat within 2% from half to double this value; 3,200 / 6,400 /
+  # 9,600 takes the best local and global points and keeps sMax increasing with
+  # delay. The Clemson r6615 value was 3,200 at C = 1,000,000; the calibration text
+  # above is Clemson's. CALIBRATION.md, "Hardware".
   sMax: 3200
   # Leader-side write admission: entries per second charged one per admitted
   # write, refilled continuously, never returned. Calibrated from the
   # measured max commit rate (sweep_smax.sh, ~80% of it). Universal.
-  replicationBudgetPerSecond: 160000
+  # Utah c6525-25g (2026-09-24): 105,000. Write-only probe on the local topology, strongest
+  # arm so a served write is a committed write: served tracked 137,866/s at 138,011 offered
+  # and plateaued at 124,000 to 132,000/s from 177,000 up, with the leader's replication
+  # stream peaking at about 136,600 commits/s; 0.78 x 135,000, rounded. The Clemson
+  # r6615 value was 160,000 (ceiling about 200,000). CALIBRATION.md, "Hardware".
+  replicationBudgetPerSecond: 105000
   # Maximum entries carried by one ordered message on a leader-to-follower
   # replication stream.
   maxEntriesPerReplicationBatch: 4000
@@ -629,9 +639,17 @@ workload:
       - { applicationId: 3, type: write, slaId: 1, weight: 4 }
       - { applicationId: 4, type: read,  slaId: 1, weight: 25 }
       - { applicationId: 4, type: write, slaId: 1, weight: 10 }
+  # Rates are fractions of C. On the Utah c6525-25g nodes at MTU 9000 C =
+  # 500,000: the single client machine (16 cores) binds, and local binds first,
+  # tracking 100% of 500,000 and 94.1% of 600,000 with the price silenced
+  # (global holds 97.8% to 700,000); the injector emits 2.5C = 1,250,000 with
+  # none skipped. At MTU 1500 the same client managed 400,000. The text below
+  # is the Clemson r6615 calibration (C = 1,000,000); CALIBRATION.md,
+  # "Hardware", keeps both sets of values.
+  #
   # The day sequence (EXPERIMENT.md): one continuous run, sessions persist
   # throughout so history and lag carry across segments. Rates are fractions of
-  # C = 1,000,000, common to all three topologies because C is a property of the
+  # C, common to all three topologies because C is a property of the
   # workload, not of the deployment - only sMax is per-topology. The cluster is
   # provisioned for ordinary peak plus headroom, not for the flash sale: normal
   # sits at 0.5C and the sale day exceeds C.
@@ -647,43 +665,43 @@ workload:
   phases:
     - name: WarmUp          # warm up the cluster
       durationSeconds: 30
-      totalTPS: 500000     # 0.5C
+      totalTPS: 250000     # 0.5C
       mix: normal
     - name: NormalDay       # baseline: price on its floor, upgrades free
       durationSeconds: 300
-      totalTPS: 500000     # 0.5C
+      totalTPS: 250000     # 0.5C
       mix: normal
     - name: HolidayPlateau  # sustained lift; equilibrium, where oscillation would appear
       durationSeconds: 300
-      totalTPS: 800000     # 0.8C
+      totalTPS: 400000     # 0.8C
       mix: holiday
     - name: SaleDay         # Prime Day scale: rate and value rise together
       durationSeconds: 300
-      totalTPS: 1800000    # 1.8C
+      totalTPS: 900000    # 1.8C
       mix: saleDay
     - name: PreFlash        # login surge; write-heavy A3 drives lag up before the burst
       durationSeconds: 120
-      totalTPS: 1000000    # 1C
+      totalTPS: 500000    # 1C
       mix: preFlash
     - name: Flash           # ~60% must be refused; floor forbids downgrading
       durationSeconds: 60
-      totalTPS: 2500000    # 2.5C
+      totalTPS: 1250000    # 2.5C
       mix: flash
     - name: Collapse        # load vanishes: does the price come down promptly
       durationSeconds: 120
-      totalTPS: 700000     # 0.7C
+      totalTPS: 350000     # 0.7C
       mix: collapse
     - name: Payday          # composition shifts, volume barely does; the valuable tenant surges
       durationSeconds: 300
-      totalTPS: 600000     # 0.6C
+      totalTPS: 300000     # 0.6C
       mix: payday
     - name: ReturnToNormal  # recovery, compared directly against the opening segment
       durationSeconds: 300
-      totalTPS: 500000     # 0.5C
+      totalTPS: 250000     # 0.5C
       mix: normal
     - name: CoolDown        # cool down to handle shutdown delays
       durationSeconds: 30
-      totalTPS: 500000     # 0.5C
+      totalTPS: 250000     # 0.5C
       mix: normal
 # Which store this run drives. "framed" is the Java store in this repo: the
 # five ServerNodes and their own Raft replication, reached over the framed TCP

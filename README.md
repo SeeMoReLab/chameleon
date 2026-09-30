@@ -595,7 +595,7 @@ bash run_all_cloudlab_sweep.sh kevindmw@clnode373.clemson.cloudlab.us ~/.ssh/clo
      (build_cloudlab.sh). C = 100,000 on the global topology, sMax 450, budget 85,000, pool cap 1,000
      (MONGODB_BASELINES.md 3i). Runs land in runs/config_<loadsweep|global>_mongodb_<mode>_<sMax>_<seed>/.
      The static load sweep is 10 minutes per arm, the day sequence 31; a four-arm pass of both is about 2 h 45 min.
-     chameleonPileus has not been smoked against mongod; add it to --modes only after a config_smoke_global_*_mongodb run in that mode. -->
+     chameleonPileus ran against mongod in the Utah sweep below without incident. -->
 
 bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_loadsweep_mongodb.yaml"
 bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "42" "config_global_mongodb.yaml"
@@ -607,6 +607,12 @@ bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/clo
 
 <!-- MongoDB repeats under other seeds, as for the Java store -->
 bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "7;100" "config_loadsweep_mongodb.yaml;config_global_mongodb.yaml"
+
+<!-- Utah c6525-25g, one machine per process, 2026-09-24 to 2026-09-27: the sweep RESULTS.md reports.
+     Two allocations (hosts.txt for the Java store, hosts_2.txt for mongod), each after setup_cloudlab.sh and,
+     for mongod, build_cloudlab.sh. No --smax: the configs carry the calibrated value. 45 runs per store. -->
+bash run_all_cloudlab_sweep.sh --hosts hosts.txt --key ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --seeds "42;7;100" "config_local.yaml;config_regional.yaml;config_global.yaml"
+bash run_all_cloudlab_sweep.sh --hosts hosts_2.txt --key ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --seeds "42;7;100" "config_local_mongodb.yaml;config_regional_mongodb.yaml;config_global_mongodb.yaml"
 
 ---
 
@@ -623,7 +629,9 @@ See `hosts.example.txt`. One line per machine: the role, the ssh target this lap
 ## Workflow
 
 ```bash
-# once per allocation; the MongoDB build environment goes on the first server only
+# once per allocation, and again after any reboot: it also sets the experiment
+# interface to MTU 9000, which run_all_cloudlab.sh checks; the MongoDB build
+# environment goes on the first server only
 ./setup_cloudlab.sh --hosts hosts.txt --key ~/.ssh/cloudlab --mongodb
 
 # once per change to the chameleon patch; builds on the first server machine and
@@ -659,3 +667,7 @@ Two things are worth measuring once, since neither is checked automatically:
 - **The baseline round trip.** Loopback adds about 0.02 ms; a CloudLab LAN adds 0.1 to 0.2 ms, against a configured 0.5 ms for a colocated site. Measure it and subtract, or the local topology's shortest hops are systematically long.
 
 All six capacities and budgets in MONGODB_BASELINES.md 3l were measured on the single-host layout and do not carry over.
+
+## Results
+
+RESULTS.md holds the finished sweep, one table per run with a row per phase and a whole-run table per store and topology across arms and seeds. It is generated: after adding or removing run directories, run `python3 results_md.py > RESULTS.md`. `analyze_runs.py` gives the pooled latency percentiles and counters for one config across modes and seeds, and `analyze_run.py` the detail of a single run.

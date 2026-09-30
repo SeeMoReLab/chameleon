@@ -287,6 +287,17 @@ if [[ "$DISTRIBUTED" == 1 ]]; then
             || die "${ALL_SSH[$i]} has no interface carrying ${ALL_LAN[$i]} (from $HOSTS_FILE)"
     done
 fi
+# The experiment interface must carry jumbo frames (setup_cloudlab.sh sets it;
+# a reboot resets it). netem queues packets, so at MTU 1500 the far links
+# drop under load and the leader loses its followers' heartbeats.
+EXPERIMENT_MTU=9000
+if [[ "$DISTRIBUTED" == 1 ]]; then
+    for i in "${!ALL_SSH[@]}"; do
+        mtu="$(ssh_to "${ALL_SSH[$i]}" "cat /sys/class/net/\$(ip -o -4 addr show | awk -v a='${ALL_LAN[$i]}' '\$4 ~ \"^\"a\"/\" {print \$2; exit}')/mtu")"
+        [[ "$mtu" == "$EXPERIMENT_MTU" ]] \
+            || die "${ALL_SSH[$i]}: experiment interface is at MTU ${mtu:-unknown}, need $EXPERIMENT_MTU; run ./setup_cloudlab.sh --hosts $HOSTS_FILE --key $KEY again (the MTU does not survive a reboot)"
+    done
+fi
 # The servers judge each request's age and remaining deadline from the client's
 # wall-clock stamps against their own clock, so machine clocks have to agree to
 # well under a deadline. A node that has just booted can be hundreds of ms off

@@ -59,7 +59,9 @@ import io.netty.channel.socket.nio.NioSocketChannel;
  * currently knows.
  *
  * Request envelope, carried in the standard {@code comment} argument:
- * {app, sla, rtt, read, frontier?, target?, wantLin, wc, waitBound}.
+ * {app, sla, rtt, read, frontier?, target?, wantLin, wc, waitBound}; rtt is the
+ * client's network estimate plus the checkout wait of the pool the request
+ * is about to use (see execute).
  * Reply envelope {@code $chameleon}: {level, wc, lastApplied, commit, readTs,
  * entryTs, serviceMs, predicted, waited, fellBack, rejected, epochMs}.
  * Timestamps travel as BSON timestamps and become the int64 (secs << 32 | inc)
@@ -238,7 +240,19 @@ public final class MongoTransport implements KvTransport {
                             + " ms of deadline left"), 0, Cause.TRANSPORT_QUEUE));
             return () -> { };
         }
-        Document command = request.getIsRead() ? findCommand(request, maxTimeMs) : updateCommand(request, maxTimeMs);
+        // The scorer subtracts the envelope's rtt from every rung's threshold as the
+        // budget already spent outside mongod. The client's own estimate is network
+        // only (KvSessionClient.observeRtt takes this pool's wait back out so that
+        // routing is not poisoned by the client's queues), but the request about to
+        // be queued on this pool will spend that wait before mongod starts its clock,
+        // and the client grades it from dispatch. Charging the wait here, per pool,
+        // lets the server see the request from the moment the client started
+        // counting; a saturated primary pool then raises rtt only for requests bound
+        // for the primary, and admission-aware routing moves the rest away.
+        double queueWaitMs = events.checkoutWaitMs(address);
+        Document command = request.getIsRead()
+                ? findCommand(request, maxTimeMs, queueWaitMs)
+                : updateCommand(request, maxTimeMs, queueWaitMs);
         Publisher<Document> publisher = siteDatabases[siteId].runCommand(command, nodePreferences[nodeId]);
 
         CommandSubscriber subscriber = new CommandSubscriber(siteId, request, onResponse, onError);
@@ -274,10 +288,18 @@ public final class MongoTransport implements KvTransport {
         return frontier < 0 ? null : new BsonTimestamp(frontier);
     }
 
-    static Document envelope(KvRequest request) {
+    /**
+     * The request envelope. {@code queueWaitMs} is the checkout wait of the pool this
+     * request is about to use; it is added to the client's network RTT estimate so
+     * the server's rho covers everything the request spends outside mongod.
+     */
+    static Document envelope(KvRequest request, double queueWaitMs) {
+        if (!(queueWaitMs >= 0) || Double.isNaN(queueWaitMs)) {
+            throw new IllegalArgumentException("pool checkout wait must be a non-negative number of ms, got " + queueWaitMs);
+        }
         Document env = new Document("app", request.getApplicationId())
                 .append("sla", request.getSlaId())
-                .append("rtt", request.getRttEstimateMs())
+                .append("rtt", request.getRttEstimateMs() + queueWaitMs)
                 .append("read", request.getIsRead());
         BsonTimestamp frontier = frontierOf(request);
         if (frontier != null) {
@@ -321,13 +343,13 @@ public final class MongoTransport implements KvTransport {
         return readConcern;
     }
 
-    Document findCommand(KvRequest request, long maxTimeMs) {
+    Document findCommand(KvRequest request, long maxTimeMs, double queueWaitMs) {
         Document command = new Document("find", settings.collection())
                 .append("filter", new Document("_id", request.getKey()))
                 .append("limit", 1)
                 .append("singleBatch", true)
                 .append("maxTimeMS", maxTimeMs)
-                .append("comment", envelope(request));
+                .append("comment", envelope(request, queueWaitMs));
         Document readConcern = readConcernFor(request);
         if (readConcern != null) {
             command.append("readConcern", readConcern);
@@ -335,8 +357,8 @@ public final class MongoTransport implements KvTransport {
         return command;
     }
 
-    Document updateCommand(KvRequest request, long maxTimeMs) {
-        return updateCommand(request, maxTimeMs, settings.collection(), settings.serverHooks());
+    Document updateCommand(KvRequest request, long maxTimeMs, double queueWaitMs) {
+        return updateCommand(request, maxTimeMs, queueWaitMs, settings.collection(), settings.serverHooks());
     }
 
     /**
@@ -351,7 +373,8 @@ public final class MongoTransport implements KvTransport {
      * the remaining deadline (an ordinary code 64). A write that is late is graded late
      * by the client, which is also how the Java store treats its writes.
      */
-    static Document updateCommand(KvRequest request, long maxTimeMs, String collection, boolean serverHooks) {
+    static Document updateCommand(KvRequest request, long maxTimeMs, double queueWaitMs, String collection,
+            boolean serverHooks) {
         Document update = new Document("q", new Document("_id", request.getKey()))
                 .append("u", new Document("$set", new Document("v", request.getValue())))
                 .append("upsert", true)
@@ -359,7 +382,7 @@ public final class MongoTransport implements KvTransport {
         Document command = new Document("update", collection)
                 .append("updates", List.of(update))
                 .append("ordered", true);
-        command.append("comment", envelope(request));
+        command.append("comment", envelope(request, queueWaitMs));
         int wc = request.getRequestedWriteConcern();
         if (wc > 0) {
             // Client-decided concern; with the hooks on the server clamps it to the
