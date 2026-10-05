@@ -46,14 +46,7 @@ public class WorkloadDriver {
     private static boolean ENABLE_NODE_NETWORK_FAILURE;
     private static int FAILED_NODE_ID;
 
-    enum FailureTargetRole {
-        LEADER,
-        FOLLOWER
-    }
-
-    private static boolean ENABLE_TIMED_NODE_FAILURE;
-    private static FailureTargetRole FAILURE_TARGET_ROLE;
-    private static int FAILURE_AFTER_SECONDS;
+    private static FailurePlan FAILURE_PLAN;
 
     private static int RTT_WINDOW_SIZE;
     private static int CLIENT_RETRY_LIMIT;
@@ -188,9 +181,7 @@ public class WorkloadDriver {
         ENABLE_NODE_NETWORK_FAILURE = config.nodeFailure.enabled;
         FAILED_NODE_ID = config.nodeFailure.failedNodeId;
 
-        ENABLE_TIMED_NODE_FAILURE = config.timedFailure.enabled;
-        FAILURE_TARGET_ROLE = FailureTargetRole.valueOf(config.timedFailure.targetRole);
-        FAILURE_AFTER_SECONDS = config.timedFailure.afterSeconds;
+        FAILURE_PLAN = FailurePlan.of(config);
 
         RTT_WINDOW_SIZE = config.client.rttWindowSize;
         CLIENT_RETRY_LIMIT = config.client.retryLimit;
@@ -455,58 +446,66 @@ public class WorkloadDriver {
                 FAILED_NODE_ID);
     }
 
-    private static void scheduleTimedNodeFailure() {
-        if (!ENABLE_TIMED_NODE_FAILURE) {
+    /**
+     * Run the failure schedule (config failureSchedule) against the workload clock: each step
+     * is resolved when it falls due, a failure against the leader the cluster has at that
+     * moment, a recovery against the node failed longest, and applied through the admin RPC
+     * that makes a node drop all inter-server traffic and fail every client request. Events
+     * print into run.log with the workload second so the analysis can mark them.
+     */
+    private static void scheduleFailurePlan() {
+        if (FAILURE_PLAN.nextStep() == null) {
             return;
         }
         Thread failureScheduler = new Thread(() -> {
-            long triggerAtMs = experimentStartTime + (Math.max(0, FAILURE_AFTER_SECONDS) * 1000L);
-            while (experimentRunning && !Thread.currentThread().isInterrupted()) {
-                if (System.currentTimeMillis() >= triggerAtMs) {
-                    injectTimedFailure();
-                    return;
+            while (experimentRunning && FAILURE_PLAN.nextStep() != null && !Thread.currentThread().isInterrupted()) {
+                long dueAtMs = experimentStartTime + FAILURE_PLAN.nextStep().atSeconds() * 1000L;
+                if (System.currentTimeMillis() >= dueAtMs) {
+                    applyNextFailureStep();
+                    continue;
                 }
                 try {
-                    Thread.sleep(100);
+                    Thread.sleep(Math.min(50, Math.max(1, dueAtMs - System.currentTimeMillis())));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
                 }
             }
-        }, "TimedFailureScheduler");
+        }, "FailureScheduler");
         failureScheduler.setDaemon(true);
         failureScheduler.start();
     }
 
-    private static void injectTimedFailure() {
-        int leaderId = findLeaderId();
-        int targetId = -1;
-
-        if (FAILURE_TARGET_ROLE == FailureTargetRole.LEADER) {
-            targetId = leaderId;
-        } else {
-            for (int i = 0; i < NUM_OF_SERVERS; i++) {
-                if (i != leaderId) {
-                    targetId = i;
-                    break;
-                }
-            }
-        }
-
-        if (targetId < 0) {
-            System.err.printf("Timed failure skipped at t=%ds: could not resolve target=%s%n",
-                    FAILURE_AFTER_SECONDS, FAILURE_TARGET_ROLE);
-            return;
-        }
-
+    private static void applyNextFailureStep() {
+        FailurePlan.Step step = FAILURE_PLAN.nextStep();
+        long elapsedSeconds = (System.currentTimeMillis() - experimentStartTime) / 1000;
+        // A failure needs the healthy leader to resolve against (findLeaderId ignores failed
+        // nodes); wait through an election if one is in progress.
+        int leaderId = step.action() == FailurePlan.Action.FAIL ? waitForLeader(LEADER_ELECTION_TIMEOUT_MS) : -1;
+        FailurePlan.Resolved resolved;
         try {
-            setDropTraffic(targetId, true);
-        } catch (StatusRuntimeException e) {
-            System.err.printf("Timed failure injection on server %d failed: %s%n", targetId, e.getStatus());
+            resolved = FAILURE_PLAN.resolve(leaderId);
+        } catch (IllegalStateException e) {
+            System.err.printf("[%ds] Failure schedule abandoned at step %s: %s%n", elapsedSeconds, step, e.getMessage());
+            FAILURE_PLAN.abandon();
             return;
         }
-        System.out.printf("Timed failure injected at t=%ds on %s node (serverId=%d)%n",
-                FAILURE_AFTER_SECONDS, FAILURE_TARGET_ROLE, targetId);
+        boolean drop = resolved.step().action() == FailurePlan.Action.FAIL;
+        try {
+            setDropTraffic(resolved.nodeId(), drop);
+        } catch (StatusRuntimeException e) {
+            System.err.printf("[%ds] Failure schedule abandoned: %s of node %d failed: %s%n", elapsedSeconds,
+                    drop ? "failure" : "recovery", resolved.nodeId(), e.getStatus());
+            FAILURE_PLAN.abandon();
+            return;
+        }
+        if (drop) {
+            System.out.printf("[%ds] Failure schedule: failed node %d (%s at %d s; leader was %d)%n", elapsedSeconds,
+                    resolved.nodeId(), resolved.step().target(), resolved.step().atSeconds(), leaderId);
+        } else {
+            System.out.printf("[%ds] Failure schedule: recovered node %d (failed longest; at %d s)%n", elapsedSeconds,
+                    resolved.nodeId(), resolved.step().atSeconds());
+        }
     }
 
     // ===== Phased workload =====
@@ -526,7 +525,7 @@ public class WorkloadDriver {
         experimentStartTime = System.currentTimeMillis();
         experimentRunning = true;
         selectAndStartNewPhase();
-        scheduleTimedNodeFailure();
+        scheduleFailurePlan();
 
         Thread phaseManager = new Thread(() -> {
             while (!Thread.currentThread().isInterrupted() && experimentRunning) {

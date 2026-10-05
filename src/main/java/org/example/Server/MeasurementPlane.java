@@ -234,6 +234,16 @@ public final class MeasurementPlane implements AutoCloseable {
         uncalibratedRiders[levelIndex][gapBucket].decrementAndGet();
     }
 
+    /** Test-only: riders currently held on one cell. */
+    int uncalibratedRidersForTest(int levelIndex, int gapBucket) {
+        return uncalibratedRiders[levelIndex][gapBucket].get();
+    }
+
+    /** Test-only: the number of histogram levels (read levels, then write concerns). */
+    int riderLevelsForTest() {
+        return uncalibratedRiders.length;
+    }
+
     private void dumpHistograms() {
         String csvPath = "histograms_" + nodeId + ".csv";
         File file = new File(csvPath);

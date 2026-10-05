@@ -75,6 +75,15 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         CHAMELEON_DECISION = enabled;
     }
 
+    /** Test-only: the replication budget services constructed from now on start with. */
+    static void setReplicationBudgetForTest(double entriesPerSecond) {
+        REPLICATION_BUDGET_PER_SECOND = entriesPerSecond;
+    }
+
+    static double replicationBudgetForTest() {
+        return REPLICATION_BUDGET_PER_SECOND;
+    }
+
     private static final int READ_LEVELS = 5;
 
     private final ServerImpl node;
@@ -299,6 +308,10 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         final RungScorer.ScoredLevel scored;
         final boolean uncalibrated;
         boolean excluded;
+        // The histogram cell whose cold-start rider this request holds, -1 for none. Kept here
+        // because a write's cell is writeLevelIndex(levelIndex), not levelIndex: releasing by
+        // levelIndex returned the rider to the wrong counter and leaked it for good.
+        int riderCell = -1;
 
         Candidate(int levelIndex, int gapBucket, RungScorer.ScoredLevel scored, boolean uncalibrated) {
             this.levelIndex = levelIndex;
@@ -340,7 +353,9 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
             if (!best.uncalibrated) {
                 return best;
             }
-            if (plane.tryAcquireUncalibratedRider(histogramIndexOf.applyAsInt(best.levelIndex), best.gapBucket)) {
+            int cell = histogramIndexOf.applyAsInt(best.levelIndex);
+            if (plane.tryAcquireUncalibratedRider(cell, best.gapBucket)) {
+                best.riderCell = cell;
                 return best;
             }
             best.excluded = true;
@@ -554,9 +569,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         double serviceMs = (System.nanoTime() - tRecvNanos) / 1_000_000.0;
         plane.fileServiceTime(plane.writeLevelIndex(chosen.levelIndex), chosen.gapBucket,
                 fellBack ? abandonedAtMs : serviceMs);
-        if (chosen.uncalibrated) {
-            plane.releaseUncalibratedRider(plane.writeLevelIndex(chosen.levelIndex), chosen.gapBucket);
-        }
+        releaseRider(chosen);
 
         send(out, stamp(KvResponse.newBuilder())
                 .setRequestId(request.getRequestId())
@@ -570,9 +583,11 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
 
     // ===== Helpers =====
 
+    /** Return the cold-start rider the request holds, if any, to the cell it was taken from; at most once. */
     private void releaseRider(Candidate chosen) {
-        if (chosen.uncalibrated) {
-            plane.releaseUncalibratedRider(chosen.levelIndex, chosen.gapBucket);
+        if (chosen.riderCell >= 0) {
+            plane.releaseUncalibratedRider(chosen.riderCell, chosen.gapBucket);
+            chosen.riderCell = -1;
         }
     }
 

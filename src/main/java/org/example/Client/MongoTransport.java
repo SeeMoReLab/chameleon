@@ -13,6 +13,7 @@ import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.example.Utility.ExperimentConfig;
 import org.example.raft.KvRequest;
 import org.example.raft.KvResponse;
 import org.example.Client.KvTransport.Cause;
@@ -101,9 +102,12 @@ public final class MongoTransport implements KvTransport {
              */
             boolean serverHooks) {
 
-        /** Acknowledgments a replica set of this size needs for w:majority. */
+        /**
+         * Acknowledgments a majority write needs: a majority of the voting members, of which
+         * MongoDB allows at most seven (ExperimentConfig.mongodbWriteMajority).
+         */
         int majority() {
-            return hosts.size() / 2 + 1;
+            return ExperimentConfig.mongodbWriteMajority(hosts.size());
         }
     }
 
@@ -193,6 +197,11 @@ public final class MongoTransport implements KvTransport {
                 .retryReads(false)
                 .retryWrites(false)
                 .build();
+    }
+
+    @Override
+    public int writeMajority() {
+        return settings.majority();
     }
 
     @Override
@@ -358,7 +367,8 @@ public final class MongoTransport implements KvTransport {
     }
 
     Document updateCommand(KvRequest request, long maxTimeMs, double queueWaitMs) {
-        return updateCommand(request, maxTimeMs, queueWaitMs, settings.collection(), settings.serverHooks());
+        return updateCommand(request, maxTimeMs, queueWaitMs, settings.collection(), settings.serverHooks(),
+                settings.majority());
     }
 
     /**
@@ -374,7 +384,7 @@ public final class MongoTransport implements KvTransport {
      * by the client, which is also how the Java store treats its writes.
      */
     static Document updateCommand(KvRequest request, long maxTimeMs, double queueWaitMs, String collection,
-            boolean serverHooks) {
+            boolean serverHooks, int majority) {
         Document update = new Document("q", new Document("_id", request.getKey()))
                 .append("u", new Document("$set", new Document("v", request.getValue())))
                 .append("upsert", true)
@@ -386,8 +396,11 @@ public final class MongoTransport implements KvTransport {
         int wc = request.getRequestedWriteConcern();
         if (wc > 0) {
             // Client-decided concern; with the hooks on the server clamps it to the
-            // majority and bounds the wait by the envelope's waitBound.
-            Document writeConcern = new Document("w", wc);
+            // majority and bounds the wait by the envelope's waitBound. A concern at the
+            // majority goes as w:"majority", not as a count: a count is also satisfied by
+            // non-voting members (a set larger than seven has them), and only a majority of
+            // the voters is the commit point.
+            Document writeConcern = new Document("w", wc >= majority ? "majority" : (Object) wc);
             if (!serverHooks) {
                 writeConcern.append("wtimeout", maxTimeMs);
             }
@@ -665,7 +678,11 @@ public final class MongoTransport implements KvTransport {
      * site is baked into a subclass and the address table is static.
      */
     public abstract static class SiteBoundChannel extends NioSocketChannel {
-        static final int MAX_SITES = 8;
+        /**
+         * One subclass per possible site, below. 32 covers the 27-server scale configs
+         * (one client site per server) with room to spare; add classes to raise it.
+         */
+        static final int MAX_SITES = 32;
         private static volatile String[] bindHosts = new String[0];
 
         static void install(List<String> hosts) {
@@ -674,8 +691,17 @@ public final class MongoTransport implements KvTransport {
 
         @SuppressWarnings("unchecked")
         static Class<? extends SocketChannel> classForSite(int site) {
-            Class<?>[] classes = { Site0.class, Site1.class, Site2.class, Site3.class,
-                    Site4.class, Site5.class, Site6.class, Site7.class };
+            Class<?>[] classes = {
+                    Site0.class, Site1.class, Site2.class, Site3.class, Site4.class, Site5.class,
+                    Site6.class, Site7.class, Site8.class, Site9.class, Site10.class, Site11.class,
+                    Site12.class, Site13.class, Site14.class, Site15.class, Site16.class, Site17.class,
+                    Site18.class, Site19.class, Site20.class, Site21.class, Site22.class, Site23.class,
+                    Site24.class, Site25.class, Site26.class, Site27.class, Site28.class, Site29.class,
+                    Site30.class, Site31.class,
+            };
+            if (classes.length != MAX_SITES) {
+                throw new IllegalStateException("site channel table has " + classes.length + " classes, MAX_SITES is " + MAX_SITES);
+            }
             return (Class<? extends SocketChannel>) classes[site];
         }
 
@@ -696,5 +722,29 @@ public final class MongoTransport implements KvTransport {
         public static final class Site5 extends SiteBoundChannel { @Override protected int site() { return 5; } }
         public static final class Site6 extends SiteBoundChannel { @Override protected int site() { return 6; } }
         public static final class Site7 extends SiteBoundChannel { @Override protected int site() { return 7; } }
+        public static final class Site8 extends SiteBoundChannel { @Override protected int site() { return 8; } }
+        public static final class Site9 extends SiteBoundChannel { @Override protected int site() { return 9; } }
+        public static final class Site10 extends SiteBoundChannel { @Override protected int site() { return 10; } }
+        public static final class Site11 extends SiteBoundChannel { @Override protected int site() { return 11; } }
+        public static final class Site12 extends SiteBoundChannel { @Override protected int site() { return 12; } }
+        public static final class Site13 extends SiteBoundChannel { @Override protected int site() { return 13; } }
+        public static final class Site14 extends SiteBoundChannel { @Override protected int site() { return 14; } }
+        public static final class Site15 extends SiteBoundChannel { @Override protected int site() { return 15; } }
+        public static final class Site16 extends SiteBoundChannel { @Override protected int site() { return 16; } }
+        public static final class Site17 extends SiteBoundChannel { @Override protected int site() { return 17; } }
+        public static final class Site18 extends SiteBoundChannel { @Override protected int site() { return 18; } }
+        public static final class Site19 extends SiteBoundChannel { @Override protected int site() { return 19; } }
+        public static final class Site20 extends SiteBoundChannel { @Override protected int site() { return 20; } }
+        public static final class Site21 extends SiteBoundChannel { @Override protected int site() { return 21; } }
+        public static final class Site22 extends SiteBoundChannel { @Override protected int site() { return 22; } }
+        public static final class Site23 extends SiteBoundChannel { @Override protected int site() { return 23; } }
+        public static final class Site24 extends SiteBoundChannel { @Override protected int site() { return 24; } }
+        public static final class Site25 extends SiteBoundChannel { @Override protected int site() { return 25; } }
+        public static final class Site26 extends SiteBoundChannel { @Override protected int site() { return 26; } }
+        public static final class Site27 extends SiteBoundChannel { @Override protected int site() { return 27; } }
+        public static final class Site28 extends SiteBoundChannel { @Override protected int site() { return 28; } }
+        public static final class Site29 extends SiteBoundChannel { @Override protected int site() { return 29; } }
+        public static final class Site30 extends SiteBoundChannel { @Override protected int site() { return 30; } }
+        public static final class Site31 extends SiteBoundChannel { @Override protected int site() { return 31; } }
     }
 }

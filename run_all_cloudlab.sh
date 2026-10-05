@@ -240,6 +240,44 @@ if [[ "$DISTRIBUTED" == 0 ]]; then
 fi
 ssh_run() { ssh_to "$CLIENT_SSH" "$@"; }
 
+# on_each <function> <index>...: run "<function> <index>" for every index as a
+# background job, one per machine, and wait for all of them. The per-machine
+# steps of setup and teardown are independent of each other and dominated by ssh
+# and scp round trips, so done one machine at a time they cost minutes per run on
+# a 27-server allocation. Each job's output goes to its own file and is printed
+# afterwards in index order, so the log reads as it did sequentially. Sets
+# ON_EACH_FAILED to the indices whose job failed and returns non-zero if any did.
+# Written for bash 3.2 (macOS): no wait -n, and no empty-array expansion under set -u.
+on_each() {
+    local fn="$1" i k out
+    shift
+    ON_EACH_FAILED=()
+    [[ $# -gt 0 ]] || return 0
+    out="$(mktemp -d)"
+    local -a pids=() idx=()
+    for i in "$@"; do
+        "$fn" "$i" > "$out/$i" 2>&1 &
+        pids+=("$!")
+        idx+=("$i")
+    done
+    for ((k = 0; k < ${#pids[@]}; k++)); do
+        wait "${pids[$k]}" || ON_EACH_FAILED+=("${idx[$k]}")
+    done
+    for i in "$@"; do
+        cat "$out/$i"
+    done
+    rm -rf "$out"
+    [[ ${#ON_EACH_FAILED[@]} -eq 0 ]]
+}
+# failed_targets <array-name>: the ssh targets of ON_EACH_FAILED's indices in that array.
+failed_targets() {
+    local i name="$1[@]" all
+    all=("${!name}")
+    for i in ${ON_EACH_FAILED[@]+"${ON_EACH_FAILED[@]}"}; do
+        printf ' %s' "${all[$i]}"
+    done
+}
+
 # protobuf-java 3.x uses sun.misc.Unsafe, which JDK 24+ warns about; only the
 # LOCAL helper invocation needs this (the machines run JDK 17).
 JAVA_MAJOR="$(java -version 2>&1 | head -1 | sed -E 's/.*version "([0-9]+).*/\1/')"
@@ -273,6 +311,11 @@ if [[ "$DISTRIBUTED" == 1 ]]; then
 fi
 
 # --- Remote preflight ---
+# Open every machine's multiplexed connection at once; the checks below then reuse
+# them instead of authenticating to each machine in turn. A machine that cannot be
+# reached fails the first check below with its own message.
+open_connection() { ssh_to "${ALL_SSH[$1]}" true; }
+on_each open_connection "${!ALL_SSH[@]}" || true
 for target in "${ALL_SSH[@]}"; do
     ssh_to "$target" "command -v java >/dev/null && command -v tmux >/dev/null" \
         || die "$target is missing java or tmux; provision it first: ./setup_cloudlab.sh $target $KEY"
@@ -349,12 +392,14 @@ REMOTE_RUN="tuneable/runs/$RUN_NAME"
 
 # --- Ship everything ---
 echo "Shipping jar, config, and runner to ${#ALL_SSH[@]} machine(s)..."
-for target in "${ALL_SSH[@]}"; do
-    ssh_to "$target" "mkdir -p $REMOTE_RUN"
-    scp_to "$JAR" "$target:tuneable/app-all.jar"
-    scp_to "$REPO_DIR/cloudlab_remote_run.sh" "$target:tuneable/cloudlab_remote_run.sh"
-    scp_to "$CLOUD_CONFIG" "$target:$REMOTE_RUN/config.yaml"
-done
+ship_one() {
+    local target="${ALL_SSH[$1]}"
+    ssh_to "$target" "mkdir -p $REMOTE_RUN" \
+        && scp_to "$JAR" "$target:tuneable/app-all.jar" \
+        && scp_to "$REPO_DIR/cloudlab_remote_run.sh" "$target:tuneable/cloudlab_remote_run.sh" \
+        && scp_to "$CLOUD_CONFIG" "$target:$REMOTE_RUN/config.yaml"
+}
+on_each ship_one "${!ALL_SSH[@]}" || die "shipping failed to:$(failed_targets ALL_SSH)"
 CONFIG_ARCHIVE="config.yaml"
 
 # --- Network setup: simulated geo latency, and the client's site aliases ---
@@ -465,6 +510,25 @@ if [[ "$GEO_ENABLED" == "true" && "$DISTRIBUTED" == 0 ]]; then
     NET_APPLIED=1
 fi
 
+# net_clear - undo everything the network setup adds, on every machine at once.
+net_clear_one() {
+    local h="$1" target="${ALL_SSH[$1]}" lan s aliases=""
+    if [[ "$DISTRIBUTED" == 0 ]]; then
+        ssh_to "$target" "sudo tc qdisc del dev lo root 2>/dev/null || true"
+        return
+    fi
+    lan="${ALL_LAN[$h]}"
+    if [[ "$h" == 0 ]]; then
+        for ((s = 0; s < GEO_SITES; s++)); do
+            aliases+="ip addr del ${GEO_SITE_HOSTS[$s]}/32 dev \$IFACE 2>/dev/null || true; "
+        done
+    else
+        aliases="ip route del $SITE_SUBNET via $CLIENT_LAN dev \$IFACE 2>/dev/null || true; "
+    fi
+    ssh_to "$target" "sudo bash -c 'IFACE=\$(ip -o -4 addr show | awk -v a=$lan '\"'\"'\$4 ~ \"^\"a\"/\" {print \$2; exit}'\"'\"'); tc qdisc del dev \$IFACE root 2>/dev/null || true; $aliases true'" || true
+}
+net_clear() { on_each net_clear_one "${!ALL_SSH[@]}" || true; }
+
 if [[ "$DISTRIBUTED" == 1 ]]; then
     # net_begin <lan-ip> <file>: discover the experiment interface from the
     # address the hosts file declares (the machines also have a control
@@ -493,6 +557,7 @@ EOF
 
     echo "Applying network setup on ${#ALL_SSH[@]} machine(s)..."
     NET_CLEAR_CMDS=()
+    NET_APPLY_FILES=()
     for h in "${!ALL_SSH[@]}"; do
         target="${ALL_SSH[$h]}"
         lan="${ALL_LAN[$h]}"
@@ -547,35 +612,25 @@ EOF
                 done
             fi
         fi
-        scp_to "$apply" "$target:tuneable/net_apply.sh"
-        rm -f "$apply"
+        NET_APPLY_FILES+=("$apply")
         echo "  $target: $rules delay rule(s) in $(geo_class_count) class(es)"
-        ssh_to "$target" "sudo bash tuneable/net_apply.sh"
     done
+    # The rule files are built above in machine order, because the delay-class map
+    # is shared state; applying them is independent per machine. A machine that
+    # fails leaves the others' rules in place, so everything is cleared before dying.
+    net_apply_one() {
+        scp_to "${NET_APPLY_FILES[$1]}" "${ALL_SSH[$1]}:tuneable/net_apply.sh" \
+            && ssh_to "${ALL_SSH[$1]}" "sudo bash tuneable/net_apply.sh"
+    }
     NET_APPLIED=1
+    if ! on_each net_apply_one "${!ALL_SSH[@]}"; then
+        NET_FAILED="$(failed_targets ALL_SSH)"
+        rm -f "${NET_APPLY_FILES[@]}"
+        net_clear
+        die "network setup failed on:$NET_FAILED"
+    fi
+    rm -f "${NET_APPLY_FILES[@]}"
 fi
-
-# net_clear - undo everything the setup above added, on every machine.
-net_clear() {
-    local h target lan
-    for h in "${!ALL_SSH[@]}"; do
-        target="${ALL_SSH[$h]}"
-        if [[ "$DISTRIBUTED" == 0 ]]; then
-            ssh_to "$target" "sudo tc qdisc del dev lo root 2>/dev/null || true"
-            continue
-        fi
-        lan="${ALL_LAN[$h]}"
-        local aliases=""
-        if [[ "$h" == 0 ]]; then
-            for ((s = 0; s < GEO_SITES; s++)); do
-                aliases+="ip addr del ${GEO_SITE_HOSTS[$s]}/32 dev \$IFACE 2>/dev/null || true; "
-            done
-        else
-            aliases="ip route del $SITE_SUBNET via $CLIENT_LAN dev \$IFACE 2>/dev/null || true; "
-        fi
-        ssh_to "$target" "sudo bash -c 'IFACE=\$(ip -o -4 addr show | awk -v a=$lan '\"'\"'\$4 ~ \"^\"a\"/\" {print \$2; exit}'\"'\"'); tc qdisc del dev \$IFACE root 2>/dev/null || true; $aliases true'" || true
-    done
-}
 
 # --- Launch the servers, then the driver ---
 if [[ "$DISTRIBUTED" == 1 ]]; then
@@ -585,21 +640,34 @@ if [[ "$DISTRIBUTED" == 1 ]]; then
             \"bash \$HOME/tuneable/cloudlab_remote_run.sh \$HOME/tuneable/app-all.jar $CONFIG_ARCHIVE $NUM_SERVERS $LABEL --role servers --server-index $i 2>&1 | tee runner.log\""
     done
     echo "Waiting for the servers to accept connections..."
-    for i in "${!SERVER_SSH[@]}"; do
+    # await_server <i>: poll node i until it is ready (0), its runner exits (1), or
+    # 360 s pass (1). All nodes are polled at once, and each failure says why.
+    await_server() {
+        local i="$1" target="${SERVER_SSH[$1]}" t
         for ((t = 0; t < 180; t++)); do
-            ssh_to "${SERVER_SSH[$i]}" "test -f $REMOTE_RUN/servers_ready" 2>/dev/null && break
-            ssh_to "${SERVER_SSH[$i]}" "tmux has-session -t =$SESSION 2>/dev/null" || {
-                echo "Server machine ${SERVER_SSH[$i]} (node $i) exited during startup; last lines of its runner.log:" >&2
-                ssh_to "${SERVER_SSH[$i]}" "tail -n 20 $REMOTE_RUN/runner.log 2>/dev/null" >&2 || true
-                net_clear
-                die "node $i failed to start"
-            }
+            if ssh_to "$target" "test -f $REMOTE_RUN/servers_ready" 2>/dev/null; then
+                echo "  node $i ready ($target)"
+                return 0
+            fi
+            if ! ssh_to "$target" "tmux has-session -t =$SESSION 2>/dev/null"; then
+                echo "Server machine $target (node $i) exited during startup; last lines of its runner.log:"
+                ssh_to "$target" "tail -n 20 $REMOTE_RUN/runner.log 2>/dev/null" || true
+                return 1
+            fi
             sleep 2
         done
-        ssh_to "${SERVER_SSH[$i]}" "test -f $REMOTE_RUN/servers_ready" \
-            || { net_clear; die "node $i (${SERVER_SSH[$i]}) not ready after 360 s; see $REMOTE_RUN/runner.log there"; }
-        echo "  node $i ready (${SERVER_SSH[$i]})"
-    done
+        if ssh_to "$target" "test -f $REMOTE_RUN/servers_ready"; then
+            echo "  node $i ready ($target)"
+            return 0
+        fi
+        echo "node $i ($target) not ready after 360 s; see $REMOTE_RUN/runner.log there"
+        return 1
+    }
+    if ! on_each await_server "${!SERVER_SSH[@]}"; then
+        NOT_READY="$(printf ' %s' "${ON_EACH_FAILED[@]}")"
+        net_clear
+        die "node(s)$NOT_READY failed to start (details above)"
+    fi
     CLIENT_ROLE=(--role client)
 else
     CLIENT_ROLE=()
@@ -653,18 +721,18 @@ wait "$TAIL_PID" 2>/dev/null || true
 # --- Stop the server machines and clear the network setup ---
 if [[ "$DISTRIBUTED" == 1 ]]; then
     echo "Stopping the server machines..."
-    for i in "${!SERVER_SSH[@]}"; do
+    stop_server() {
+        local target="${SERVER_SSH[$1]}" t
         # The driver shuts the cluster down itself; this marker releases a
         # server runner whose children outlived it.
-        ssh_to "${SERVER_SSH[$i]}" "touch $REMOTE_RUN/stop_servers" || true
-    done
-    for i in "${!SERVER_SSH[@]}"; do
+        ssh_to "$target" "touch $REMOTE_RUN/stop_servers" || true
         for ((t = 0; t < 30; t++)); do
-            ssh_to "${SERVER_SSH[$i]}" "test -f $REMOTE_RUN/servers_done" 2>/dev/null && break
+            ssh_to "$target" "test -f $REMOTE_RUN/servers_done" 2>/dev/null && break
             sleep 2
         done
-        ssh_to "${SERVER_SSH[$i]}" "tmux kill-session -t =$SESSION 2>/dev/null || true"
-    done
+        ssh_to "$target" "tmux kill-session -t =$SESSION 2>/dev/null || true"
+    }
+    on_each stop_server "${!SERVER_SSH[@]}" || die "could not reach server machine(s) to stop them:$(failed_targets SERVER_SSH)"
 fi
 if [[ "$NET_APPLIED" == 1 ]]; then
     echo "Clearing network setup..."
@@ -682,8 +750,13 @@ fi
 # directly, so the files stay compressed locally too).
 echo "Compressing CSVs and fetching into runs/$RUN_NAME/..."
 mkdir -p "$REPO_DIR/runs"
-ssh_run "gzip -f $REMOTE_RUN/*.csv 2>/dev/null || true"
-scp -q -r "${SSH_OPTS[@]}" "$CLIENT_SSH:$REMOTE_RUN" "$REPO_DIR/runs/"
+fetch_client() {
+    ssh_run "gzip -f $REMOTE_RUN/*.csv 2>/dev/null || true" \
+        && scp -q -r "${SSH_OPTS[@]}" "$CLIENT_SSH:$REMOTE_RUN" "$REPO_DIR/runs/"
+}
+if [[ "$DISTRIBUTED" == 0 ]]; then
+    fetch_client
+fi
 if [[ "$DISTRIBUTED" == 1 ]]; then
     # Each server machine holds its own artifacts: the Java store's
     # occupancy_<i>.csv, server_drain_<i>.csv and server_<i>.log are written by
@@ -696,19 +769,42 @@ if [[ "$DISTRIBUTED" == 1 ]]; then
     # Streamed as a tar rather than an scp of a glob: the remote shell expands
     # the list, so this does not depend on scp's transfer backend doing it
     # (OpenSSH 9 moved to SFTP, which does not).
-    for i in "${!SERVER_SSH[@]}"; do
-        ssh_to "${SERVER_SSH[$i]}" "gzip -f $REMOTE_RUN/*.csv 2>/dev/null || true"
-        NODE_TMP="$(mktemp -d)"
-        ssh_to "${SERVER_SSH[$i]}" \
+    #
+    # The client and every server machine are fetched at once, each server into
+    # its own staging directory, and merged afterwards in node order.
+    FETCH_TMP="$(mktemp -d)"
+    fetch_one() {
+        if [[ "$1" == client ]]; then
+            fetch_client
+            return
+        fi
+        local i="$1" target="${SERVER_SSH[$1]}"
+        mkdir -p "$FETCH_TMP/$i"
+        ssh_to "$target" "gzip -f $REMOTE_RUN/*.csv 2>/dev/null || true" || return 1
+        ssh_to "$target" \
             "cd \$HOME/$REMOTE_RUN && ls occupancy_*.csv* server_drain_*.csv* server_*.log mongod_*.log mongod_*.stdout runner.log 2>/dev/null | tar czf - -T -" \
-            | tar xzf - -C "$NODE_TMP" 2>/dev/null || true
+            | tar xzf - -C "$FETCH_TMP/$i" 2>/dev/null || true
+    }
+    on_each fetch_one client "${!SERVER_SSH[@]}" || true
+    CLIENT_FETCH_FAILED=0
+    FETCH_FAILED=()
+    for i in ${ON_EACH_FAILED[@]+"${ON_EACH_FAILED[@]}"}; do
+        if [[ "$i" == client ]]; then CLIENT_FETCH_FAILED=1; else FETCH_FAILED+=("$i"); fi
+    done
+    [[ "$CLIENT_FETCH_FAILED" == 0 && -d "$REPO_DIR/runs/$RUN_NAME" ]] \
+        || die "could not fetch the client's results; they are still at $CLIENT_SSH:$REMOTE_RUN"
+    for i in "${!SERVER_SSH[@]}"; do
+        NODE_TMP="$FETCH_TMP/$i"
         # runner.log would collide across machines; keep each under its node.
         [[ -f "$NODE_TMP/runner.log" ]] && mv "$NODE_TMP/runner.log" "$NODE_TMP/runner_node$i.log"
         # The client's own copies of any same-named file are not overwritten:
         # only this machine's node-indexed artifacts are moved in.
         cp -n "$NODE_TMP"/* "$REPO_DIR/runs/$RUN_NAME/" 2>/dev/null || true
-        rm -rf "$NODE_TMP"
     done
+    rm -rf "$FETCH_TMP"
+    if [[ ${#FETCH_FAILED[@]} -gt 0 ]]; then
+        die "could not fetch from server node(s)$(printf ' %s' "${FETCH_FAILED[@]}"); the rest is in runs/$RUN_NAME"
+    fi
     # The layout is part of the result: which machine was which node, and what
     # each was running. run_info.txt points here.
     {

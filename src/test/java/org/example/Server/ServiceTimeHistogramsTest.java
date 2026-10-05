@@ -78,6 +78,45 @@ class ServiceTimeHistogramsTest {
     }
 
     @Test
+    void aCellNobodySamplesIsForgottenOnceItsNewestSampleWeighsOnePercent() {
+        // A level that looked bad once and then stopped being chosen: decay alone
+        // would keep the bad shape forever, since the scorer only samples what it picks.
+        ServiceTimeHistograms h = new ServiceTimeHistograms(1, 0.95);
+        assertEquals(90, h.staleTicks, "0.95^90 is the first power below 1%");
+        for (int i = 0; i < 100; i++) {
+            h.file(0, 0, 400.0);
+        }
+        h.refreshTick();
+        assertEquals(0.0, h.snapshot(0, 0).fractionAtMost(200.0), 1e-9, "the burst reads as slow");
+
+        for (int idle = 1; idle < h.staleTicks; idle++) {
+            h.refreshTick();
+            assertTrue(h.snapshot(0, 0).totalCount > 0, "still remembered after " + idle + " idle ticks");
+            assertEquals(0.0, h.snapshot(0, 0).fractionAtMost(200.0), 1e-9, "decay keeps the shape");
+        }
+        h.refreshTick();
+        ServiceTimeHistograms.Snapshot s = h.snapshot(0, 0);
+        assertEquals(0.0, s.totalCount, 1e-9, "forgotten after staleTicks idle ticks");
+        assertEquals(1.0, s.fractionAtMost(200.0), 1e-9, "forgotten, the cell is uncalibrated again");
+        assertEquals(0.0, s.meanMs, 1e-9);
+    }
+
+    @Test
+    void aCellThatKeepsBeingSampledIsNeverForgotten() {
+        // One sample every 60 ticks: the decayed count drops well below one
+        // sample between them, but the evidence is fresh, so it is kept.
+        ServiceTimeHistograms h = new ServiceTimeHistograms(1, 0.95);
+        for (int tick = 0; tick < 600; tick++) {
+            if (tick % 60 == 0) {
+                h.file(0, 0, 10.0);
+            }
+            h.refreshTick();
+            assertTrue(h.snapshot(0, 0).totalCount > 0, "a sampled cell must keep its evidence, tick " + tick);
+        }
+        assertEquals(10.0, h.snapshot(0, 0).meanMs, 1e-9);
+    }
+
+    @Test
     void emptyCellIsFreeAndCertain() {
         ServiceTimeHistograms h = new ServiceTimeHistograms(1, 0.95);
         h.refreshTick();

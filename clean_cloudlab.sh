@@ -98,11 +98,11 @@ fi
 # --- Remote cleanup ---
 # The script travels on stdin (`bash -s`), so no remote command line contains
 # the process patterns below and pgrep never matches the cleanup itself.
-CLEAN_FAIL=0
-for t in "${!TARGETS[@]}"; do
+clean_one() {
+local t="$1"
 echo
 echo "remote: connecting to ${TARGETS[$t]}"
-ssh "${SSH_OPTS[@]}" "${TARGETS[$t]}" "bash -s -- $DRY_RUN $PURGE_INCOMPLETE '${TARGET_LAN[$t]}' '$SITE_SUBNET'" <<'REMOTE' || CLEAN_FAIL=1
+ssh "${SSH_OPTS[@]}" "${TARGETS[$t]}" "bash -s -- $DRY_RUN $PURGE_INCOMPLETE '${TARGET_LAN[$t]}' '$SITE_SUBNET'" <<'REMOTE'
 set -euo pipefail
 DRY_RUN="$1"
 PURGE_INCOMPLETE="$2"
@@ -302,6 +302,25 @@ LEFT="$(list_pids)"
 [[ "$FAIL" == 0 ]] || exit 1
 echo "remote: clean; ready for the next run_all_cloudlab.sh"
 REMOTE
+}
+
+# Every machine at once (each may wait up to 15 s for its processes to exit),
+# each into its own file, printed in host order once all have finished.
+OUT_DIR="$(mktemp -d)"
+trap 'rm -rf "$OUT_DIR"' EXIT
+echo
+echo "remote: cleaning ${#TARGETS[@]} machine(s) in parallel"
+JOBS=()
+for t in "${!TARGETS[@]}"; do
+    clean_one "$t" > "$OUT_DIR/$t" 2>&1 &
+    JOBS+=("$!")
+done
+FAILED=()
+for t in "${!TARGETS[@]}"; do
+    wait "${JOBS[$t]}" || FAILED+=("${TARGETS[$t]}")
+done
+for t in "${!TARGETS[@]}"; do
+    cat "$OUT_DIR/$t"
 done
 
-[[ "$CLEAN_FAIL" == 0 ]] || die "cleanup did not verify on every machine (see above)"
+[[ ${#FAILED[@]} -eq 0 ]] || die "cleanup did not verify on: ${FAILED[*]} (see above)"

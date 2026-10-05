@@ -461,11 +461,16 @@ nodeFailure:
   enabled: false
   failedNodeId: 0
 
-# Failure injection: fail one node (by role) N seconds into the experiment.
-timedFailure:
-  enabled: false
-  targetRole: FOLLOWER        # LEADER | FOLLOWER
-  afterSeconds: 40
+# Failure schedule (Java store only; the loader rejects a non-empty one with
+# transport: mongodb). Events at seconds from the workload start, strictly
+# increasing: fail the LEADER the cluster has at that moment or the
+# lowest-numbered healthy FOLLOWER, or recover the node that has been failed
+# longest. A failed node drops every inter-server RPC and answers clients with
+# failures until recovered; at most numServers - majority nodes may be failed
+# at once. Empty here; config_failure_*.yaml carry the failure experiment.
+#   - { atSeconds: 150, action: fail, target: LEADER }
+#   - { atSeconds: 390, action: recover }
+failureSchedule: []
 
 # Simulated geo latency, applied and cleared by run_all_cloudlab.sh (Linux
 # tc/netem on the node's loopback; the runner rewrites cluster.serverHosts to

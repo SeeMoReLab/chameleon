@@ -26,7 +26,8 @@ import com.mongodb.connection.ClusterConnectionMode;
  *
  *   MongoClusterAdmin init <config.yaml>   initiate the replica set from cluster.serverHosts
  *                                          (member k tagged {node: "k"}; the preferred leader
- *                                          gets priority 10), then wait for a primary
+ *                                          gets priority 10; members from the eighth on are
+ *                                          non-voting), then wait for a primary
  *   MongoClusterAdmin load <config.yaml>   insert workload.keySpace documents {_id: "user<i>", v: ""}
  *                                          with w:majority so the followers start caught up
  */
@@ -67,16 +68,39 @@ public final class MongoClusterAdmin {
                 .build());
     }
 
+    /**
+     * The replica set members: member k is {@code serverHosts[k]:port} tagged {node: "k"}; the
+     * preferred leader has priority 10 and every other voter 1. MongoDB allows at most
+     * {@link ExperimentConfig#MONGODB_MAX_VOTING_MEMBERS} voters, so from that index on members
+     * are initiated with votes 0 and priority 0: they replicate and serve reads but neither
+     * elect nor count toward w:majority, which is then a majority of the voters (4 of 7),
+     * where the Raft store's majority is numServers/2 + 1.
+     */
+    static List<Document> members(ExperimentConfig config) {
+        List<String> hosts = config.cluster.serverHosts;
+        int port = config.mongodb.port;
+        int voting = ExperimentConfig.mongodbVotingMembers(hosts.size());
+        if (config.cluster.preferredLeaderId >= voting) {
+            throw new IllegalArgumentException("preferredLeaderId " + config.cluster.preferredLeaderId
+                    + " is a non-voting member (only the first " + voting + " vote) and cannot become primary");
+        }
+        List<Document> members = new ArrayList<>();
+        for (int node = 0; node < hosts.size(); node++) {
+            Document member = new Document("_id", node).append("host", hosts.get(node) + ":" + port);
+            if (node < voting) {
+                member.append("priority", node == config.cluster.preferredLeaderId ? 10.0 : 1.0);
+            } else {
+                member.append("priority", 0.0).append("votes", 0);
+            }
+            members.add(member.append("tags", new Document("node", Integer.toString(node))));
+        }
+        return members;
+    }
+
     private static void init(ExperimentConfig config) {
         List<String> hosts = config.cluster.serverHosts;
         int port = config.mongodb.port;
-        List<Document> members = new ArrayList<>();
-        for (int node = 0; node < hosts.size(); node++) {
-            members.add(new Document("_id", node)
-                    .append("host", hosts.get(node) + ":" + port)
-                    .append("priority", node == config.cluster.preferredLeaderId ? 10.0 : 1.0)
-                    .append("tags", new Document("node", Integer.toString(node))));
-        }
+        List<Document> members = members(config);
         Document rsConfig = new Document("_id", config.mongodb.replicaSet).append("members", members);
         try (MongoClient client = direct(hosts.get(0), port)) {
             try {

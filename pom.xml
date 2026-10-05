@@ -171,6 +171,10 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <!-- The reduced POM is written to the project root whatever
+                                 build.dir says, so two sweeps building at once corrupted
+                                 each other's copy. Nothing here publishes the artifact. -->
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
                             <shadedArtifactAttached>true</shadedArtifactAttached>
                             <shadedClassifierName>all</shadedClassifierName>
                             <transformers>

@@ -37,7 +37,7 @@ public final class ExperimentConfig {
     public Workload workload;
     public List<AppSlas> slas;
     public NodeFailure nodeFailure;
-    public TimedFailure timedFailure;
+    public List<FailureEvent> failureSchedule; // Java store only; empty = no failures (see FailureEvent)
     public Geo geo;
     // Optional (MONGODB_PORT.md): "framed" (default, the Java KV store) or "mongodb" (the patched
     // mongod replica set). With "mongodb" the mongodb block below is required.
@@ -174,10 +174,17 @@ public final class ExperimentConfig {
         public Integer failedNodeId;
     }
 
-    public static final class TimedFailure {
-        public Boolean enabled;      // fail one node N seconds after start
-        public String targetRole;    // LEADER or FOLLOWER
-        public Integer afterSeconds;
+    /**
+     * One step of the failure schedule, Java store only. At {@code atSeconds} from the workload
+     * start the driver either fails a node, the current LEADER or the lowest-numbered healthy
+     * FOLLOWER, resolved at that moment, or recovers the node that has been failed longest. A
+     * failed node drops every inter-server RPC and answers clients with failures until it is
+     * recovered; the schedule may never fail more nodes at once than a majority can spare.
+     */
+    public static final class FailureEvent {
+        public Integer atSeconds;
+        public String action;   // fail | recover
+        public String target;   // fail: LEADER | FOLLOWER; recover: must be absent
     }
 
     /**
@@ -504,7 +511,7 @@ public final class ExperimentConfig {
     /** Keep in sync with ClientMetricsTracker.MAX_RUNGS (fixed CSV columns). */
     private static final int MAX_RUNGS_PER_SLA = 4;
 
-    private static void validateSla(Sla sla, String prefix, boolean isRead, int majority) {
+    private static void validateSla(Sla sla, String prefix, boolean isRead, int majority, String majorityRule) {
         require(sla.slaId, prefix + "[].slaId");
         String slaPrefix = prefix + "[slaId=" + sla.slaId + "]";
         require(sla.rungs, slaPrefix + ".rungs");
@@ -532,7 +539,7 @@ public final class ExperimentConfig {
                 }
                 if (rung.concern < 1 || rung.concern > majority) {
                     throw new IllegalArgumentException(slaPrefix + ".rungs[].concern " + rung.concern
-                            + " is out of range [1, " + majority + "]");
+                            + " is out of range [1, " + majority + "] (" + majorityRule + ")");
                 }
             }
             requirePositive(rung.latencyMs, slaPrefix + ".rungs[].latencyMs");
@@ -548,6 +555,33 @@ public final class ExperimentConfig {
     /** True when the MongoDB transport relies on the server-side Chameleon module (parameters, reply envelope). */
     public boolean mongodbServerHooks() {
         return mongodbTransport() && !Boolean.FALSE.equals(mongodb.serverHooks);
+    }
+
+    /**
+     * MongoDB allows at most this many voting members in a replica set. MongoClusterAdmin
+     * initiates the first that many members as voters and the rest with votes 0 and
+     * priority 0: they replicate and serve reads but neither elect nor count toward the
+     * commit point.
+     */
+    public static final int MONGODB_MAX_VOTING_MEMBERS = 7;
+
+    /** Members of a mongod replica set of this size that vote. */
+    public static int mongodbVotingMembers(int numServers) {
+        return Math.min(numServers, MONGODB_MAX_VOTING_MEMBERS);
+    }
+
+    /** Acknowledgments a mongod majority write needs: a majority of the voting members. */
+    public static int mongodbWriteMajority(int numServers) {
+        return mongodbVotingMembers(numServers) / 2 + 1;
+    }
+
+    /**
+     * Acknowledgments a committed write needs on this run's store, which is also the largest
+     * concern a write rung may ask for: numServers/2 + 1 on the Raft store, a majority of the
+     * voting members on mongod (4 of 7 once the set is larger than 7, where Raft's is N/2 + 1).
+     */
+    public int writeMajority() {
+        return mongodbTransport() ? mongodbWriteMajority(cluster.numServers) : cluster.numServers / 2 + 1;
     }
 
     private void validateTransport() {
@@ -603,9 +637,74 @@ public final class ExperimentConfig {
             throw new IllegalArgumentException(
                     "nodeFailure injection is not supported with transport: mongodb (no inter-server RPC drop hook)");
         }
-        if (timedFailure != null && Boolean.TRUE.equals(timedFailure.enabled)) {
+        if (failureSchedule != null && !failureSchedule.isEmpty()) {
             throw new IllegalArgumentException(
-                    "timedFailure injection is not supported with transport: mongodb (no inter-server RPC drop hook)");
+                    "failureSchedule is not supported with transport: mongodb (no inter-server RPC drop hook)");
+        }
+    }
+
+    /**
+     * The failure schedule is checked as a whole: times inside the workload and strictly
+     * increasing, every failure naming a role, every recovery having something to recover,
+     * and never more nodes failed at once than the cluster can lose and still commit
+     * (numServers minus the write majority). It cannot be combined with nodeFailure, whose
+     * from-the-start failure the schedule's recoveries would not know about.
+     */
+    private void validateFailureSchedule() {
+        require(failureSchedule, "failureSchedule");
+        if (failureSchedule.isEmpty()) {
+            return;
+        }
+        if (Boolean.TRUE.equals(nodeFailure.enabled)) {
+            throw new IllegalArgumentException("failureSchedule cannot be combined with nodeFailure.enabled:"
+                    + " its recoveries assume the schedule is the only source of failures");
+        }
+        long workloadSeconds = workload.phases.stream().mapToLong(p -> p.durationSeconds).sum();
+        int survivable = cluster.numServers - writeMajority();
+        int failed = 0;
+        int last = -1;
+        for (int i = 0; i < failureSchedule.size(); i++) {
+            FailureEvent e = failureSchedule.get(i);
+            String prefix = "failureSchedule[" + i + "]";
+            require(e, prefix);
+            require(e.atSeconds, prefix + ".atSeconds");
+            require(e.action, prefix + ".action");
+            if (e.atSeconds < 0 || e.atSeconds >= workloadSeconds) {
+                throw new IllegalArgumentException(prefix + ".atSeconds must lie inside the workload, [0, "
+                        + workloadSeconds + "), got " + e.atSeconds);
+            }
+            if (e.atSeconds <= last) {
+                throw new IllegalArgumentException(prefix + ".atSeconds must be strictly increasing, got "
+                        + e.atSeconds + " after " + last);
+            }
+            last = e.atSeconds;
+            switch (e.action) {
+                case "fail" -> {
+                    if (e.target == null || !(e.target.equals("LEADER") || e.target.equals("FOLLOWER"))) {
+                        throw new IllegalArgumentException(prefix + ".target must be LEADER or FOLLOWER for a fail, got '"
+                                + e.target + "'");
+                    }
+                    failed++;
+                    if (failed > survivable) {
+                        throw new IllegalArgumentException(prefix + " would fail " + failed + " nodes at once; "
+                                + cluster.numServers + " servers with a write majority of " + writeMajority()
+                                + " can lose at most " + survivable);
+                    }
+                }
+                case "recover" -> {
+                    if (e.target != null) {
+                        throw new IllegalArgumentException(prefix + ".target must be absent for a recover:"
+                                + " it brings back the node that has been failed longest");
+                    }
+                    if (failed == 0) {
+                        throw new IllegalArgumentException(prefix + " recovers at " + e.atSeconds
+                                + " s but nothing is failed then");
+                    }
+                    failed--;
+                }
+                default -> throw new IllegalArgumentException(prefix + ".action must be fail or recover, got '"
+                        + e.action + "'");
+            }
         }
     }
 
@@ -632,6 +731,11 @@ public final class ExperimentConfig {
         if (cluster.preferredLeaderId < -1 || cluster.preferredLeaderId >= cluster.numServers) {
             throw new IllegalArgumentException("cluster.preferredLeaderId must be -1 (no preference) or a server id"
                     + " in 0.." + (cluster.numServers - 1) + ", got " + cluster.preferredLeaderId);
+        }
+        if (mongodbTransport() && cluster.preferredLeaderId >= mongodbVotingMembers(cluster.numServers)) {
+            throw new IllegalArgumentException("cluster.preferredLeaderId " + cluster.preferredLeaderId
+                    + " is a non-voting member on mongod (only the first " + MONGODB_MAX_VOTING_MEMBERS
+                    + " members vote) and cannot become primary");
         }
 
         require(mode, "mode");
@@ -761,7 +865,12 @@ public final class ExperimentConfig {
                         + " (distinct, contiguous), got " + new java.util.TreeSet<>(appIds));
             }
         }
-        int majority = (cluster.numServers / 2) + 1;
+        int majority = writeMajority();
+        String majorityRule = mongodbTransport()
+                ? "on mongod a majority write is a majority of the voting members, of which there are at most "
+                        + MONGODB_MAX_VOTING_MEMBERS + ": " + mongodbVotingMembers(cluster.numServers) + "/2 + 1 = "
+                        + majority
+                : "the write majority is numServers/2 + 1 = " + majority;
         for (AppSlas app : slas) {
             require(app.applicationId, "slas[].applicationId");
             String appPrefix = "slas[applicationId=" + app.applicationId + "]";
@@ -771,10 +880,10 @@ public final class ExperimentConfig {
                 throw new IllegalArgumentException(appPrefix + " must register at least one read and one write SLA");
             }
             for (Sla sla : app.read) {
-                validateSla(sla, appPrefix + ".read", true, majority);
+                validateSla(sla, appPrefix + ".read", true, majority, majorityRule);
             }
             for (Sla sla : app.write) {
-                validateSla(sla, appPrefix + ".write", false, majority);
+                validateSla(sla, appPrefix + ".write", false, majority, majorityRule);
             }
         }
 
@@ -784,14 +893,6 @@ public final class ExperimentConfig {
         if (nodeFailure.failedNodeId < 0 || nodeFailure.failedNodeId >= cluster.numServers) {
             throw new IllegalArgumentException("nodeFailure.failedNodeId must be in [0, " + (cluster.numServers - 1) + "]");
         }
-
-        require(timedFailure, "timedFailure");
-        require(timedFailure.enabled, "timedFailure.enabled");
-        require(timedFailure.targetRole, "timedFailure.targetRole");
-        if (!timedFailure.targetRole.equals("LEADER") && !timedFailure.targetRole.equals("FOLLOWER")) {
-            throw new IllegalArgumentException("timedFailure.targetRole must be LEADER or FOLLOWER, got '" + timedFailure.targetRole + "'");
-        }
-        requirePositive(timedFailure.afterSeconds, "timedFailure.afterSeconds");
 
         require(geo, "geo");
         require(geo.enabled, "geo.enabled");
@@ -953,5 +1054,7 @@ public final class ExperimentConfig {
                         + new java.util.TreeSet<>(workload.mixes.keySet()));
             }
         }
+    
+        validateFailureSchedule();
     }
 }

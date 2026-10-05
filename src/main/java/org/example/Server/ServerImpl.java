@@ -2,6 +2,7 @@ package org.example.Server;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
@@ -1177,7 +1178,7 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
     // Called with the Raft write lock held.
     private void advanceCommitIndexIfPossible() {
         int previous = commitIndex.get();
-        int candidate = getCommitIndexIfPossibleEarlyExitMethod();
+        int candidate = getCommitIndexIfPossible();
         if (candidate <= previous) {
             return;
         }
@@ -1507,28 +1508,37 @@ public class ServerImpl extends RaftGrpc.RaftImplBase {
         return maxObservedReplicationBatchEntries.get();
     }
 
-    // should be inside a lock; walks down from the max matchIndex, so it is
-    // O(n) in practice because followers trail the leader by a few entries
-    private int getCommitIndexIfPossibleEarlyExitMethod() {
-        int maxMatchIndex = -1;
+    // Called with the Raft write lock held. The highest index a majority holds
+    // is the (N/2)-th largest matchIndex: the leader's own entry stays -1, so
+    // N/2 followers plus the leader are a majority. Only a current-term entry
+    // may be committed by counting, and terms never decrease along the log, so
+    // when that entry is older nothing above the commit index is committable.
+    // The cost is a sort of N values whatever the followers' spread. Walking
+    // down from the highest matchIndex instead cost the spread times N per
+    // acknowledgement, under this lock; a replication backlog widens the
+    // spread, so every acknowledgement got slower as the backlog grew and the
+    // backlog fed itself instead of draining.
+    private int getCommitIndexIfPossible() {
+        int[] matches = new int[NUM_OF_SERVERS];
         for (int i = 0; i < NUM_OF_SERVERS; i++) {
-            maxMatchIndex = Math.max(maxMatchIndex, matchIndex.get(i));
+            matches[i] = matchIndex.get(i);
         }
-        for (int idx = maxMatchIndex; idx > commitIndex.get(); idx--) {
-            int count = 0;
-            for (int i = 0; i < NUM_OF_SERVERS; i++) {
-                if (matchIndex.get(i) >= idx) {
-                    count++;
-                }
-            }
-            // count is followers only (the leader's own matchIndex stays -1),
-            // so followers >= N/2 plus the leader itself is a majority. Only
-            // current-term entries may be committed by counting.
-            if (count >= (NUM_OF_SERVERS / 2) && log.get(idx).term == currentTerm.get()) {
-                return idx;
-            }
+        int candidate = majorityMatchIndex(matches, NUM_OF_SERVERS / 2);
+        if (candidate <= commitIndex.get() || log.get(candidate).term != currentTerm.get()) {
+            return -1;
         }
-        return -1;
+        return candidate;
+    }
+
+    /** The largest index at least {@code quorum} of the match indices have reached: the quorum-th largest. */
+    static int majorityMatchIndex(int[] matchIndexes, int quorum) {
+        if (quorum < 1 || quorum > matchIndexes.length) {
+            throw new IllegalArgumentException("quorum " + quorum + " out of range for "
+                    + matchIndexes.length + " match indices");
+        }
+        int[] sorted = matchIndexes.clone();
+        Arrays.sort(sorted);
+        return sorted[sorted.length - quorum];
     }
 
     // this resets and starts the timer again

@@ -371,4 +371,112 @@ class ExperimentConfigTest {
             Files.delete(tmp);
         }
     }
+
+    private static final Path SCALE_9 = Path.of("..", "config_scale_9.yaml");
+    private static final Path SCALE_MONGODB_9 = Path.of("..", "config_scale_mongodb_9.yaml");
+
+    @Test
+    void theWriteMajorityFollowsTheStore() {
+        assertEquals(5, ExperimentConfig.load(SCALE_9).writeMajority(), "Raft: 9/2 + 1");
+        assertEquals(4, ExperimentConfig.load(SCALE_MONGODB_9).writeMajority(),
+                "mongod: nine members but at most seven voters, and a majority write is a majority of the voters");
+        assertEquals(3, ExperimentConfig.load(MONGODB_CONFIG).writeMajority(), "five members, five voters");
+    }
+
+    @Test
+    void mongodWriteRungsAreBoundedByTheVotingMajority() throws IOException {
+        String yaml = Files.readString(SCALE_MONGODB_9).replace("concern: 4\n", "concern: 5\n");
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, yaml);
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ExperimentConfig.load(tmp));
+            assertTrue(e.getMessage().contains("voting members"), e.getMessage());
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    @Test
+    void mongodPreferredLeaderMustBeAVotingMember() throws IOException {
+        String yaml = Files.readString(SCALE_MONGODB_9).replace("\n  preferredLeaderId: 0\n", "\n  preferredLeaderId: 8\n");
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, yaml);
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ExperimentConfig.load(tmp));
+            assertTrue(e.getMessage().contains("non-voting"), e.getMessage());
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    private static final Path FAILURE_LEADER = Path.of("..", "config_failure_leader_global.yaml");
+
+    private static void assertRejected(String yaml, String fragment) throws IOException {
+        Path tmp = Files.createTempFile("config-test", ".yaml");
+        try {
+            Files.writeString(tmp, yaml);
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ExperimentConfig.load(tmp));
+            assertTrue(e.getMessage().contains(fragment), e.getMessage());
+        } finally {
+            Files.delete(tmp);
+        }
+    }
+
+    /** The leader failure config with its schedule replaced by the given event lines. */
+    private static String withSchedule(String base, String schedule) {
+        int a = base.indexOf("failureSchedule:");
+        int b = base.indexOf("\n\n", a);
+        return base.substring(0, a) + "failureSchedule:\n" + schedule + base.substring(b);
+    }
+
+    @Test
+    void theFailureConfigsLoadAndTheScheduleIsEmptyEverywhereElse() {
+        ExperimentConfig leader = ExperimentConfig.load(FAILURE_LEADER);
+        assertEquals(4, leader.failureSchedule.size());
+        assertEquals(150, leader.failureSchedule.get(0).atSeconds);
+        assertEquals("LEADER", leader.failureSchedule.get(0).target);
+        assertEquals("recover", leader.failureSchedule.get(2).action);
+        assertEquals(660, leader.workload.phases.stream().mapToLong(p -> p.durationSeconds).sum());
+        assertTrue(ExperimentConfig.load(REPO_CONFIG).failureSchedule.isEmpty());
+        assertTrue(ExperimentConfig.load(MONGODB_CONFIG).failureSchedule.isEmpty());
+    }
+
+    @Test
+    void failureScheduleIsRejectedOnMongod() throws IOException {
+        String yaml = Files.readString(MONGODB_CONFIG).replace("failureSchedule: []\n",
+                "failureSchedule:\n  - { atSeconds: 150, action: fail, target: LEADER }\n");
+        assertRejected(yaml, "failureSchedule is not supported with transport: mongodb");
+    }
+
+    @Test
+    void failureScheduleMustKeepAMajorityAlive() throws IOException {
+        String base = Files.readString(FAILURE_LEADER);
+        assertRejected(withSchedule(base, """
+                  - { atSeconds: 150, action: fail, target: LEADER }
+                  - { atSeconds: 270, action: fail, target: FOLLOWER }
+                  - { atSeconds: 300, action: fail, target: FOLLOWER }
+                """), "can lose at most 2");
+    }
+
+    @Test
+    void failureScheduleStepsMustBeOrderedAndRecoverSomething() throws IOException {
+        String base = Files.readString(FAILURE_LEADER);
+        assertRejected(withSchedule(base, "  - { atSeconds: 150, action: recover }\n"), "nothing is failed");
+        assertRejected(withSchedule(base, """
+                  - { atSeconds: 270, action: fail, target: LEADER }
+                  - { atSeconds: 150, action: fail, target: FOLLOWER }
+                """), "strictly increasing");
+        assertRejected(withSchedule(base, "  - { atSeconds: 660, action: fail, target: LEADER }\n"),
+                "inside the workload");
+        assertRejected(withSchedule(base, "  - { atSeconds: 150, action: fail }\n"), "LEADER or FOLLOWER");
+        assertRejected(withSchedule(base, """
+                  - { atSeconds: 150, action: fail, target: LEADER }
+                  - { atSeconds: 300, action: recover, target: LEADER }
+                """), "must be absent for a recover");
+        assertRejected(withSchedule(base, "  - { atSeconds: 150, action: crash, target: LEADER }\n"),
+                "fail or recover");
+    }
 }

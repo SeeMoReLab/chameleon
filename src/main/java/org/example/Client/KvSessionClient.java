@@ -174,7 +174,7 @@ public final class KvSessionClient implements AutoCloseable {
         this.transport = transport;
         this.ownsTransport = ownsTransport;
         this.numServers = transport.numServers();
-        this.majority = (numServers / 2) + 1;
+        this.majority = transport.writeMajority();
         this.mode = mode;
         this.retryLimit = retryLimit;
         this.lostTimeoutMs = lostTimeoutMs;
@@ -521,6 +521,24 @@ public final class KvSessionClient implements AutoCloseable {
         }
 
         if (!response.getOk()) {
+            // A failure is the fast answer of a node that cannot serve; a failed node answers
+            // every request this way. Routing has to learn it exactly as it learns a
+            // rejection, or the node keeps its pre-failure window and admit ratio and draws
+            // its share of traffic for the whole outage, each request costing a round trip
+            // and a random retry. Feeding the RTT estimator keeps the node's window live so
+            // that, once recovered, exploration probes restore it on fresh samples.
+            double failureLatencyMs = (responseReceiveNanos - entry.firstSendNanos) / 1_000_000.0;
+            observeRtt(nodeId, failureLatencyMs, response.getServiceTimeMs());
+            AdmitRates failureAdmitRates = admitRatesFor(request.getIsRead(), request.getSlaId());
+            if (failureAdmitRates != null) {
+                failureAdmitRates.onReject(nodeId);
+            } else if (selector != null) {
+                if (request.getIsRead()) {
+                    selector.observeReadRejected(nodeId, request.getWantLinearizable());
+                } else {
+                    selector.observeWriteRejected(request.getRequestedWriteConcern());
+                }
+            }
             if (entry.attempt < retryLimit) {
                 dispatch(request, Math.floorMod(roundRobin.getAndIncrement(), numServers), entry.attempt + 1,
                         0, 0, -1, false);

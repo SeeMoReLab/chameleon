@@ -44,6 +44,15 @@ public interface KvTransport extends AutoCloseable {
     int numSites();
 
     /**
+     * Acknowledgments a committed write needs on this transport's store, which is also the
+     * largest write concern a client may ask for: numServers/2 + 1 on the Raft store. The
+     * MongoDB transport overrides it with a majority of the voting members.
+     */
+    default int writeMajority() {
+        return numServers() / 2 + 1;
+    }
+
+    /**
      * Recent time a request waits inside this transport before it reaches the network,
      * in ms, for the given path. Queueing here is a property of the client, not of the
      * node, so the session client keeps it out of the round trip estimate it feeds the

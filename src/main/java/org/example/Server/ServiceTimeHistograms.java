@@ -1,5 +1,6 @@
 package org.example.Server;
 
+import java.util.Arrays;
 import java.util.concurrent.atomic.DoubleAdder;
 
 /**
@@ -19,13 +20,21 @@ import java.util.concurrent.atomic.DoubleAdder;
  *
  * With decay d per tick of length t, the effective memory is roughly
  * t / (1 - d): 100 ms and 0.95 gives about 2 seconds. The decay comes from
- * config (server.histogramDecay).
+ * config (server.histogramDecay). That memory holds only while samples
+ * arrive: decay rescales every bucket alike, so a cell nobody samples keeps
+ * its shape, and the scorer samples only the level it chooses. A level that
+ * once looked bad would never be tried again. So a cell is emptied once even
+ * its newest sample has decayed to STALE_WEIGHT of its weight (90 ticks, about
+ * 9 s, at 0.95): it is uncalibrated again, and the cold-start rider cap probes
+ * it. A cell that keeps receiving samples, however rarely, keeps its evidence.
  */
 public final class ServiceTimeHistograms {
 
     public static final int LATENCY_BUCKETS = 64;
     public static final double MIN_LATENCY_MS = 0.5;
     public static final double BUCKET_RATIO = 1.15;
+    // A cell is forgotten once its newest sample weighs this little.
+    private static final double STALE_WEIGHT = 0.01;
 
     // Gap buckets: <= 0 (already satisfiable), two coarse waiting bands sized
     // to the configured replication-batch scale, and far behind.
@@ -39,6 +48,8 @@ public final class ServiceTimeHistograms {
 
     private final int numLevels;
     private final double decay;
+    // Ticks without a sample after which a cell is emptied.
+    final int staleTicks;
 
     // Hot path: lock-free pending samples.
     private final DoubleAdder[][][] pendingBuckets;
@@ -49,6 +60,7 @@ public final class ServiceTimeHistograms {
     private final double[][][] stateBuckets;
     private final double[][] stateSum;
     private final double[][] stateCount;
+    private final int[][] idleTicks;
 
     private volatile Snapshot[][] snapshots;
 
@@ -58,6 +70,8 @@ public final class ServiceTimeHistograms {
         }
         this.numLevels = numLevels;
         this.decay = decay;
+        this.staleTicks = (int) Math.ceil(Math.log(STALE_WEIGHT) / Math.log(decay));
+        this.idleTicks = new int[numLevels][GAP_BUCKETS];
         this.pendingBuckets = new DoubleAdder[numLevels][GAP_BUCKETS][LATENCY_BUCKETS];
         this.pendingSum = new DoubleAdder[numLevels][GAP_BUCKETS];
         this.pendingCount = new DoubleAdder[numLevels][GAP_BUCKETS];
@@ -136,7 +150,15 @@ public final class ServiceTimeHistograms {
                     cumulative[b] = running;
                 }
                 stateSum[l][g] = (stateSum[l][g] + pendingSum[l][g].sumThenReset()) * decay;
-                stateCount[l][g] = (stateCount[l][g] + pendingCount[l][g].sumThenReset()) * decay;
+                double arrived = pendingCount[l][g].sumThenReset();
+                stateCount[l][g] = (stateCount[l][g] + arrived) * decay;
+                idleTicks[l][g] = arrived > 0 ? 0 : Math.min(idleTicks[l][g] + 1, staleTicks);
+                if (idleTicks[l][g] >= staleTicks && stateCount[l][g] > 0) {
+                    Arrays.fill(state, 0.0);
+                    Arrays.fill(cumulative, 0.0);
+                    stateSum[l][g] = 0.0;
+                    stateCount[l][g] = 0.0;
+                }
                 double mean = stateCount[l][g] <= 0 ? 0.0 : stateSum[l][g] / stateCount[l][g];
                 fresh[l][g] = new Snapshot(cumulative, stateCount[l][g], mean);
             }

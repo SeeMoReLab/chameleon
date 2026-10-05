@@ -203,19 +203,65 @@ class MongoTransportTest {
     @Test
     void writeCommandBoundsTheAcknowledgmentWaitWithoutTrippingTheDriver() {
         KvRequest write = KvRequest.newBuilder().setRequestId(9).setApplicationId(1).setSlaId(1).setIsRead(false)
-                .setKey("user1").setValue("v").setRequestedWriteConcern(3).build();
-        Document hooksOn = MongoTransport.updateCommand(write, 750, 0.0, "kv", true);
+                .setKey("user1").setValue("v").setRequestedWriteConcern(2).build();
+        Document hooksOn = MongoTransport.updateCommand(write, 750, 0.0, "kv", true, 3);
         assertFalse(hooksOn.containsKey("maxTimeMS"),
                 "a write never carries maxTimeMS: its expiry inside the replication wait marks the primary UNKNOWN");
-        assertEquals(new Document("w", 3), hooksOn.get("writeConcern", Document.class),
+        assertEquals(new Document("w", 2), hooksOn.get("writeConcern", Document.class),
                 "with the hooks on the server bounds the wait from the envelope");
 
-        Document hooksOff = MongoTransport.updateCommand(write, 750, 0.0, "kv", false);
+        Document hooksOff = MongoTransport.updateCommand(write, 750, 0.0, "kv", false, 3);
         assertFalse(hooksOff.containsKey("maxTimeMS"), "without the hooks a write never carries maxTimeMS");
-        assertEquals(new Document("w", 3).append("wtimeout", 750L), hooksOff.get("writeConcern", Document.class),
+        assertEquals(new Document("w", 2).append("wtimeout", 750L), hooksOff.get("writeConcern", Document.class),
                 "the remaining deadline bounds the acknowledgment wait instead");
         assertEquals("kv", hooksOff.getString("update"));
         assertTrue(hooksOff.containsKey("comment"), "the envelope still travels for the hook-cost comparison");
+    }
+
+    @Test
+    void aWriteAtTheMajorityGoesAsMajorityNotAsACount() {
+        KvRequest write = KvRequest.newBuilder().setRequestId(9).setApplicationId(1).setSlaId(1).setIsRead(false)
+                .setKey("user1").setValue("v").setRequestedWriteConcern(3).build();
+        assertEquals(new Document("w", "majority"),
+                MongoTransport.updateCommand(write, 750, 0.0, "kv", true, 3).get("writeConcern", Document.class),
+                "a count is also satisfied by non-voting members; only a majority of the voters is the commit point");
+        assertEquals(new Document("w", "majority").append("wtimeout", 750L),
+                MongoTransport.updateCommand(write, 750, 0.0, "kv", false, 3).get("writeConcern", Document.class));
+        assertEquals(new Document("w", 3),
+                MongoTransport.updateCommand(write, 750, 0.0, "kv", true, 4).get("writeConcern", Document.class),
+                "below the majority the count stands");
+    }
+
+    @Test
+    void theMajorityIsAMajorityOfTheVotingMembers() {
+        assertEquals(2, settingsFor(3).majority());
+        assertEquals(3, settingsFor(5).majority());
+        assertEquals(4, settingsFor(7).majority());
+        assertEquals(4, settingsFor(27).majority(),
+                "MongoDB allows seven voters; the other twenty members replicate without a vote");
+    }
+
+    @Test
+    void oneBoundChannelClassPerSiteUpToTheCap() throws Exception {
+        assertTrue(MongoTransport.SiteBoundChannel.MAX_SITES >= 27, "the 27-server scale configs need 27 client sites");
+        java.util.Set<Class<?>> seen = new java.util.HashSet<>();
+        for (int site = 0; site < MongoTransport.SiteBoundChannel.MAX_SITES; site++) {
+            Class<?> c = MongoTransport.SiteBoundChannel.classForSite(site);
+            assertTrue(seen.add(c), "site " + site + " reuses " + c.getSimpleName());
+            assertEquals("Site" + site, c.getSimpleName(), "the table must be in site order");
+            assertTrue(MongoTransport.SiteBoundChannel.class.isAssignableFrom(c));
+        }
+        assertThrows(ArrayIndexOutOfBoundsException.class,
+                () -> MongoTransport.SiteBoundChannel.classForSite(MongoTransport.SiteBoundChannel.MAX_SITES));
+    }
+
+    private static MongoTransport.Settings settingsFor(int hosts) {
+        List<String> names = new java.util.ArrayList<>();
+        for (int i = 0; i < hosts; i++) {
+            names.add("h" + i);
+        }
+        return new MongoTransport.Settings(names, 27017, "rs0", "db", "kv", 1000, 200, 1000, List.of("127.0.2.1"),
+                List.of("virginia"), true);
     }
 
     @Test

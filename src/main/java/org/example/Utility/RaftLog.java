@@ -26,6 +26,12 @@ import org.example.raft.LogEntryProto;
  *
  * Thread safe via an internal read-write lock; the owning ServerImpl
  * additionally orders append/truncate/compact against its own consensus lock.
+ * The next index alone is also published through a volatile, written by every
+ * mutation while it holds the write lock, so nextIndex() and lastIndex() never
+ * take the lock. Request threads read the last index on every reply; under the
+ * lock those reads held off the leader's appends, each of which runs inside the
+ * consensus write lock, and the queue that formed behind the appends stalled
+ * the replication acknowledgements (a lock convoy at 27 nodes).
  */
 public class RaftLog {
     private final ArrayList<LogEntry> entries = new ArrayList<>();
@@ -34,6 +40,10 @@ public class RaftLog {
     private int firstIndex = 0;
     // Term of the entry at firstIndex - 1; -1 while nothing has been compacted.
     private int lastIncludedTerm = -1;
+    // Always firstIndex + entries.size(); written only under the write lock.
+    // Volatile so a reader that sees index i also sees what the writer did
+    // before publishing it (the owner applies the KV view before appending).
+    private volatile int nextIndex = 0;
 
     /** Logical index of the first retained entry (0 while nothing is compacted). */
     public int firstIndex() {
@@ -64,14 +74,9 @@ public class RaftLog {
         }
     }
 
-    /** Index the next appended entry will get: one past the last entry, retained or compacted. */
+    /** Index the next appended entry will get: one past the last entry, retained or compacted. Lock-free. */
     public int nextIndex() {
-        lock.readLock().lock();
-        try {
-            return firstIndex + entries.size();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return nextIndex;
     }
 
     /** Index of the last entry ever appended (retained or compacted); -1 for an empty log. */
@@ -143,6 +148,12 @@ public class RaftLog {
                     + " was expected (first retained " + firstIndex + ")");
         }
         entries.add(entry);
+        publishNextIndexLocked();
+    }
+
+    // Every mutation ends here, under the write lock.
+    private void publishNextIndexLocked() {
+        nextIndex = firstIndex + entries.size();
     }
 
     /** The retained entry at a logical index; throws for compacted or unwritten indices. */
@@ -215,6 +226,7 @@ public class RaftLog {
             if (from < entries.size()) {
                 entries.subList(from, entries.size()).clear();
             }
+            publishNextIndexLocked();
         } finally {
             lock.writeLock().unlock();
         }
@@ -240,6 +252,7 @@ public class RaftLog {
             entries.subList(0, lastIncluded - firstIndex + 1).clear();
             firstIndex = lastIncluded + 1;
             lastIncludedTerm = term;
+            publishNextIndexLocked();
         } finally {
             lock.writeLock().unlock();
         }
@@ -257,6 +270,7 @@ public class RaftLog {
             entries.clear();
             firstIndex = lastIncluded + 1;
             lastIncludedTerm = term;
+            publishNextIndexLocked();
         } finally {
             lock.writeLock().unlock();
         }

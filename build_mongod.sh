@@ -178,6 +178,12 @@ FREE_GB="$(df -BG --output=avail "$OUTPUT_ROOT" | tail -1 | tr -dc '0-9')"
 # --- Build ---
 echo "building mongod $BUILD_ID (commit ${BASE_COMMIT:0:12}, patch ${PATCH_HASH}, profile ${BAZEL_PROFILE})"
 START=$(date +%s)
+# The bazel server outlives the build and keeps the stdout and stderr it inherited from
+# this script, so a caller that pipes the output (build_cloudlab.sh tees it into build.log
+# inside tmux) sees no end of file until the server's idle timeout, three hours later, and
+# a finished build looks hung. Stop the server on the way out, success or failure; the
+# next build restarts it in seconds and loses nothing (the output root stays on disk).
+trap 'bazel shutdown >/dev/null 2>&1 || true' EXIT
 bazel build --config="$BAZEL_PROFILE" install-mongod --disable_warnings_as_errors=True
 echo "build finished in $(( $(date +%s) - START )) s"
 
