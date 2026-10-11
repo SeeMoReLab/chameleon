@@ -265,6 +265,33 @@ class MongoTransportTest {
     }
 
     @Test
+    void theDriversPerClientClusterClockIsReachableAndAdvances() {
+        MongoClientSettings settings = MongoClientSettings.builder()
+                .applyToClusterSettings(b -> b.hosts(List.of(new ServerAddress("127.0.0.1", 1)))
+                        .serverSelectionTimeout(50, TimeUnit.MILLISECONDS))
+                .build();
+        try (com.mongodb.reactivestreams.client.MongoClient client =
+                com.mongodb.reactivestreams.client.MongoClients.create(settings)) {
+            com.mongodb.internal.connection.ClusterClock clock = MongoTransport.clusterClockOf(client);
+            org.bson.BsonDocument time = new org.bson.BsonDocument("clusterTime", new BsonTimestamp(1_700_000_000, 5));
+            clock.advance(time);
+            assertEquals(new BsonTimestamp(1_700_000_000, 5), clock.getClusterTime(),
+                    "advancing one client's clock is how a site's clients are kept on one clock");
+        }
+    }
+
+    @Test
+    void replyClusterTimeConvertsToTheDocumentTheClockTakes() {
+        Document reply = new Document("ok", 1.0).append("$clusterTime", new Document("clusterTime",
+                new BsonTimestamp(1_700_000_000, 9)).append("signature",
+                new Document("hash", new org.bson.types.Binary(new byte[20])).append("keyId", 0L)));
+        org.bson.BsonDocument time = MongoTransport.clusterTimeOf(reply);
+        assertEquals(new BsonTimestamp(1_700_000_000, 9), time.getTimestamp("clusterTime"));
+        assertTrue(time.isDocument("signature"));
+        assertNull(MongoTransport.clusterTimeOf(new Document("ok", 1.0)), "no $clusterTime, nothing to share");
+    }
+
+    @Test
     void poolBudgetSplitsOverTheSiteClientsRoundingUp() {
         MongoTransport.Settings settings = new MongoTransport.Settings(List.of("h0", "h1", "h2"), 27017, "rs0",
                 "db", "kv", 1667, 200, 1000, List.of("127.0.2.1"), List.of("virginia"), true);

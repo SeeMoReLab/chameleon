@@ -1,5 +1,6 @@
 package org.example.Client;
 
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.ArrayList;
@@ -7,6 +8,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import org.bson.BsonDocument;
@@ -33,6 +35,8 @@ import com.mongodb.TagSet;
 import com.mongodb.connection.ClusterConnectionMode;
 import com.mongodb.connection.TransportSettings;
 import com.mongodb.connection.ServerDescription;
+import com.mongodb.internal.connection.Cluster;
+import com.mongodb.internal.connection.ClusterClock;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import com.mongodb.reactivestreams.client.MongoDatabase;
@@ -129,11 +133,15 @@ public final class MongoTransport implements KvTransport {
      * poolSizePerClient() connections, so a pair's connection budget is unchanged and its
      * checkout ceiling is this many times higher.
      *
-     * Each session stays on one client (forSession), never round-robin per request. A
-     * client gossips its own cluster clock, and a secondary refuses an afterClusterTime
-     * ahead of the clock a read arrives with (InvalidOptions); a session's frontier comes
-     * from its own replies, so its client's clock always covers it, as it did with one
-     * client per site. Round-robin broke that: 1,707 refused causal reads in one short run.
+     * Each session stays on one client (forSession), and the site's clients share one
+     * cluster clock (shareClusterTime). A client gossips its own cluster clock, and a
+     * node refuses an afterClusterTime ahead of the clock a read arrives with
+     * (InvalidOptions). A read's readTs, which becomes the session frontier, can run a few
+     * increments ahead of the replying secondary's own clusterTime while it applies the
+     * oplog; one client per site saw every reply of the site, so its clock almost always
+     * covered such a frontier anyway (0-41 refusals a run). Four clients each saw a quarter
+     * of them: round-robin per request gave 1,707 refusals in one short run, pinning alone
+     * still 693 in one scale 15 run of the arm that hops between nodes (chameleonPileus).
      */
     static final int CLIENTS_PER_SITE = 4;
 
@@ -143,6 +151,10 @@ public final class MongoTransport implements KvTransport {
     private final MongoClient[][] siteClients;
     private final MongoDriverEvents[][] siteEvents;
     private final MongoDatabase[][] siteDatabases;
+    /** [site][client]: each client's cluster clock, kept together per site by shareClusterTime. */
+    private final ClusterClock[][] siteClocks;
+    /** Per site, the latest cluster time already shared to all of its clients (BsonTimestamp value). */
+    private final AtomicLong[] siteSharedClusterTime;
     private final ReadPreference[] nodePreferences;
     /** Per node, the address string the driver's pool events are keyed by. */
     private final String[] nodeAddresses;
@@ -164,7 +176,10 @@ public final class MongoTransport implements KvTransport {
         this.siteClients = new MongoClient[numSites][CLIENTS_PER_SITE];
         this.siteDatabases = new MongoDatabase[numSites][CLIENTS_PER_SITE];
         this.siteEvents = new MongoDriverEvents[numSites][CLIENTS_PER_SITE];
+        this.siteClocks = new ClusterClock[numSites][CLIENTS_PER_SITE];
+        this.siteSharedClusterTime = new AtomicLong[numSites];
         for (int site = 0; site < numSites; site++) {
+            siteSharedClusterTime[site] = new AtomicLong(Long.MIN_VALUE);
             for (int c = 0; c < CLIENTS_PER_SITE; c++) {
                 siteEvents[site][c] = new MongoDriverEvents(settings.siteNames().get(site) + "/" + c);
                 MongoClientSettings clientSettings = clientSettings(settings, seeds, TransportSettings.nettyBuilder()
@@ -173,6 +188,7 @@ public final class MongoTransport implements KvTransport {
                         .build(), siteEvents[site][c]);
                 siteClients[site][c] = MongoClients.create(clientSettings);
                 siteDatabases[site][c] = siteClients[site][c].getDatabase(settings.database());
+                siteClocks[site][c] = clusterClockOf(siteClients[site][c]);
             }
         }
         this.nodePreferences = new ReadPreference[settings.hosts().size()];
@@ -197,6 +213,54 @@ public final class MongoTransport implements KvTransport {
         return events.poolSaturated(address, maxPoolSize)
                 && events.queueDepth(address) > 0
                 && events.checkoutWaitMs(address) > remainingMs;
+    }
+
+    /**
+     * The client's cluster clock, which the driver keeps per client and exposes only
+     * internally (MongoClientImpl.getCluster is package-private; driver pinned at 5.11.1).
+     * Fails loudly rather than run with clocks that drift apart per site.
+     */
+    static ClusterClock clusterClockOf(MongoClient client) {
+        try {
+            Method getCluster = client.getClass().getDeclaredMethod("getCluster");
+            getCluster.setAccessible(true);
+            return ((Cluster) getCluster.invoke(client)).getClock();
+        } catch (ReflectiveOperationException | ClassCastException e) {
+            throw new IllegalStateException("cannot reach the MongoDB driver's per-client cluster clock on "
+                    + client.getClass().getName() + "; the driver version changed?", e);
+        }
+    }
+
+    /**
+     * Advance every client of the site to a reply's {@code $clusterTime}, so the site gossips
+     * one clock as a single client did (CLIENTS_PER_SITE). Called before the reply reaches
+     * the session, whose next request may carry the frontier this reply set. Only a time
+     * newer than the last one shared is spread; ClusterClock.advance never moves back.
+     */
+    private void shareClusterTime(int siteId, BsonDocument clusterTime) {
+        if (clusterTime == null || !clusterTime.isTimestamp("clusterTime")) {
+            return;
+        }
+        long value = clusterTime.getTimestamp("clusterTime").getValue();
+        AtomicLong shared = siteSharedClusterTime[siteId];
+        long prev;
+        do {
+            prev = shared.get();
+            if (value <= prev) {
+                return;
+            }
+        } while (!shared.compareAndSet(prev, value));
+        for (ClusterClock clock : siteClocks[siteId]) {
+            clock.advance(clusterTime);
+        }
+    }
+
+    /** A reply's {@code $clusterTime} as the BSON document ClusterClock takes; null when absent. */
+    static BsonDocument clusterTimeOf(Document reply) {
+        Object raw = reply.get("$clusterTime");
+        return raw instanceof Document doc
+                ? doc.toBsonDocument(BsonDocument.class, MongoClientSettings.getDefaultCodecRegistry())
+                : null;
     }
 
     /** A view pinned to one of each site's clients; every session sends through one (CLIENTS_PER_SITE). */
@@ -706,6 +770,10 @@ public final class MongoTransport implements KvTransport {
                 return;
             }
             if (t instanceof MongoCommandException commandException) {
+                BsonDocument raw = commandException.getResponse();
+                if (raw != null && raw.isDocument("$clusterTime")) {
+                    shareClusterTime(siteId, raw.getDocument("$clusterTime"));
+                }
                 KvResponse mapped;
                 try {
                     mapped = errorReply(siteId, client, request, commandException);
@@ -750,6 +818,7 @@ public final class MongoTransport implements KvTransport {
                 onError.accept(new RpcFailure(Status.INTERNAL.withDescription("runCommand completed without a reply"), 0));
                 return;
             }
+            shareClusterTime(siteId, clusterTimeOf(document));
             KvResponse response;
             try {
                 response = toResponse(request, document, settings.serverHooks(), settings.majority());
