@@ -286,8 +286,10 @@ public class WorkloadDriver {
         for (int app = 0; app < NUM_APPLICATIONS; app++) {
             for (int session = 0; session < SESSIONS_PER_APPLICATION; session++) {
                 int siteId = session % numSites;
+                // The session's index among its application's sessions at this site, so every
+                // application spreads evenly over a site's driver clients (KvTransport.forSession).
                 appSessions[app][session] = new KvSessionClient(app + 1, siteId,
-                        CLIENT_SITE_NAMES.get(siteId), transport, CLIENT_MODE,
+                        CLIENT_SITE_NAMES.get(siteId), transport.forSession(session / numSites), CLIENT_MODE,
                         RTT_WINDOW_SIZE, CLIENT_RETRY_LIMIT, CLIENT_LOST_TIMEOUT_MS,
                         readSlasByApp.get(app + 1), writeSlasByApp.get(app + 1),
                         EXPLORATION_FRACTION, FOLLOWER_LIN_READS,

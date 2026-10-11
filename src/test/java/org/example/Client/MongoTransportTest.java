@@ -265,6 +265,15 @@ class MongoTransportTest {
     }
 
     @Test
+    void poolBudgetSplitsOverTheSiteClientsRoundingUp() {
+        MongoTransport.Settings settings = new MongoTransport.Settings(List.of("h0", "h1", "h2"), 27017, "rs0",
+                "db", "kv", 1667, 200, 1000, List.of("127.0.2.1"), List.of("virginia"), true);
+        int share = settings.poolSizePerClient();
+        assertTrue(share * MongoTransport.CLIENTS_PER_SITE >= 1667, "the clients together never hold less than the budget");
+        assertTrue((share - 1) * MongoTransport.CLIENTS_PER_SITE < 1667, "and no more than one connection each above it");
+    }
+
+    @Test
     void poolGrowsUnthrottledAndWaitsItsOwnTimeout() {
         MongoTransport.Settings settings = new MongoTransport.Settings(List.of("h0", "h1", "h2"), 27017, "rs0",
                 "db", "kv", 4000, 200, 1000, List.of("127.0.2.1"), List.of("virginia"), true);
@@ -276,8 +285,9 @@ class MongoTransportTest {
         assertTrue(client.getClusterSettings().getClusterListeners().contains(events));
         assertTrue(client.getConnectionPoolSettings().getConnectionPoolListeners().contains(events));
         assertEquals("", events.summary(), "nothing notable yet");
-        assertEquals(4000, client.getConnectionPoolSettings().getMaxSize());
-        assertEquals(4000, client.getConnectionPoolSettings().getMaxConnecting(),
+        assertEquals(4000 / MongoTransport.CLIENTS_PER_SITE, client.getConnectionPoolSettings().getMaxSize(),
+                "each of a site's clients holds its share of the pair's connection budget");
+        assertEquals(4000 / MongoTransport.CLIENTS_PER_SITE, client.getConnectionPoolSettings().getMaxConnecting(),
                 "every missing connection opens at once, not two at a time");
         assertEquals(1000, client.getConnectionPoolSettings().getMaxWaitTime(TimeUnit.MILLISECONDS));
         assertEquals(200, client.getClusterSettings().getServerSelectionTimeout(TimeUnit.MILLISECONDS),

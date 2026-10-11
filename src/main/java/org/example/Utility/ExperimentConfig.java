@@ -50,7 +50,7 @@ public final class ExperimentConfig {
         public String replicaSet;                // replica set name passed to --replSet and rs.initiate
         public String database;                  // database holding the key-value collection
         public String collection;                // collection holding documents {_id: key, v: value}
-        public Integer maxPoolSize;              // driver connections per client site (bounds in-flight ops per site)
+        public Integer maxPoolSize;              // driver connections per (client site, server) pair, split over MongoTransport.CLIENTS_PER_SITE clients
         public Integer serverSelectionTimeoutMs; // how long the driver waits for a node before the request fails
         public Integer poolWaitTimeoutMs;        // how long a checkout waits for a pooled connection (must cover one open, two round trips)
         public Integer statusPollIntervalMs;     // period of the serverStatus poll that writes occupancy_<n>.csv

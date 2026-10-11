@@ -64,6 +64,16 @@ public interface KvTransport extends AutoCloseable {
     }
 
     /**
+     * The transport one session sends through, keyed by a number that spreads a site's
+     * sessions evenly. A transport that carries a site's requests over several driver
+     * clients returns a view pinned to one of them (MongoTransport.CLIENTS_PER_SITE);
+     * one with a single path per site returns itself.
+     */
+    default KvTransport forSession(int sessionKey) {
+        return this;
+    }
+
+    /**
      * Send {@code request} to {@code nodeId} from {@code siteId}. Exactly one
      * of {@code onResponse} or {@code onError} fires, on a transport thread.
      * {@code remainingDeadlineNanos} bounds the whole exchange.

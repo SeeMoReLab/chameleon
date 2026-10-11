@@ -45,10 +45,10 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 
 /**
  * KvTransport over the MongoDB wire protocol, against the patched mongod
- * (MONGODB_PORT.md, Milestone 3). One MongoClient per client site, sharing
- * one Netty event loop; the site's source address is bound inside the Netty
- * socket channel so the netem delay rules can match per (site, server) pair
- * without a process or namespace per site.
+ * (MONGODB_PORT.md, Milestone 3). CLIENTS_PER_SITE MongoClients per client
+ * site, all sharing one Netty event loop; the site's source address is bound
+ * inside the Netty socket channel so the netem delay rules can match per
+ * (site, server) pair without a process or namespace per site.
  *
  * Every request is a raw runCommand so the reply comes back whole, including
  * the {@code $chameleon} envelope the patched server appends; the fluent
@@ -109,13 +109,40 @@ public final class MongoTransport implements KvTransport {
         int majority() {
             return ExperimentConfig.mongodbWriteMajority(hosts.size());
         }
+
+        /** Each client's share of maxPoolSize, which bounds a (site, server) pair across the site's clients. */
+        int poolSizePerClient() {
+            return (maxPoolSize + CLIENTS_PER_SITE - 1) / CLIENTS_PER_SITE;
+        }
     }
+
+    /**
+     * Driver clients per client site. The driver serializes every connection checkout of a
+     * pool through that pool's single AsyncGetter thread, and a client keeps one pool per
+     * server, so with one client per site a (site, server) pair could check out only as fast
+     * as one thread: about 40-50k/s on a c6525-25g client. Nearest-node routing sends a
+     * site's whole read stream through one pair, and the Flash phase exceeds that. The
+     * getter's queue then grows, its live tasks push young-GC pauses from ~3 ms to ~200 ms,
+     * the whole client stalls, and checkouts time out while the servers sit idle (MongoDB
+     * scale 3 Flash: 36% of wall time in GC pauses, paths that served nothing for 50 s).
+     * The site's sessions are spread evenly over this many clients, each holding
+     * poolSizePerClient() connections, so a pair's connection budget is unchanged and its
+     * checkout ceiling is this many times higher.
+     *
+     * Each session stays on one client (forSession), never round-robin per request. A
+     * client gossips its own cluster clock, and a secondary refuses an afterClusterTime
+     * ahead of the clock a read arrives with (InvalidOptions); a session's frontier comes
+     * from its own replies, so its client's clock always covers it, as it did with one
+     * client per site. Round-robin broke that: 1,707 refused causal reads in one short run.
+     */
+    static final int CLIENTS_PER_SITE = 4;
 
     private final Settings settings;
     private final EventLoopGroup eventLoopGroup;
-    private final MongoClient[] siteClients;
-    private final MongoDriverEvents[] siteEvents;
-    private final MongoDatabase[] siteDatabases;
+    /** [site][client] */
+    private final MongoClient[][] siteClients;
+    private final MongoDriverEvents[][] siteEvents;
+    private final MongoDatabase[][] siteDatabases;
     private final ReadPreference[] nodePreferences;
     /** Per node, the address string the driver's pool events are keyed by. */
     private final String[] nodeAddresses;
@@ -134,17 +161,19 @@ public final class MongoTransport implements KvTransport {
             seeds.add(new ServerAddress(host, settings.port()));
         }
         int numSites = settings.siteBindHosts().size();
-        this.siteClients = new MongoClient[numSites];
-        this.siteDatabases = new MongoDatabase[numSites];
-        this.siteEvents = new MongoDriverEvents[numSites];
+        this.siteClients = new MongoClient[numSites][CLIENTS_PER_SITE];
+        this.siteDatabases = new MongoDatabase[numSites][CLIENTS_PER_SITE];
+        this.siteEvents = new MongoDriverEvents[numSites][CLIENTS_PER_SITE];
         for (int site = 0; site < numSites; site++) {
-            siteEvents[site] = new MongoDriverEvents(settings.siteNames().get(site));
-            MongoClientSettings clientSettings = clientSettings(settings, seeds, TransportSettings.nettyBuilder()
-                    .eventLoopGroup(eventLoopGroup)
-                    .socketChannelClass(SiteBoundChannel.classForSite(site))
-                    .build(), siteEvents[site]);
-            siteClients[site] = MongoClients.create(clientSettings);
-            siteDatabases[site] = siteClients[site].getDatabase(settings.database());
+            for (int c = 0; c < CLIENTS_PER_SITE; c++) {
+                siteEvents[site][c] = new MongoDriverEvents(settings.siteNames().get(site) + "/" + c);
+                MongoClientSettings clientSettings = clientSettings(settings, seeds, TransportSettings.nettyBuilder()
+                        .eventLoopGroup(eventLoopGroup)
+                        .socketChannelClass(SiteBoundChannel.classForSite(site))
+                        .build(), siteEvents[site][c]);
+                siteClients[site][c] = MongoClients.create(clientSettings);
+                siteDatabases[site][c] = siteClients[site][c].getDatabase(settings.database());
+            }
         }
         this.nodePreferences = new ReadPreference[settings.hosts().size()];
         this.nodeAddresses = new String[settings.hosts().size()];
@@ -170,12 +199,67 @@ public final class MongoTransport implements KvTransport {
                 && events.checkoutWaitMs(address) > remainingMs;
     }
 
+    /** A view pinned to one of each site's clients; every session sends through one (CLIENTS_PER_SITE). */
     @Override
-    public double queueWaitMs(int siteId, int nodeId) {
-        return siteEvents[siteId].checkoutWaitMs(nodeAddresses[nodeId]);
+    public KvTransport forSession(int sessionKey) {
+        return new SessionView(Math.floorMod(sessionKey, CLIENTS_PER_SITE));
     }
 
-    /** Driver settings for one site's client; the transport is the site's bound Netty channel. */
+    /** Refused: requests must go through forSession, which picks the client and so the cluster clock. */
+    @Override
+    public double queueWaitMs(int siteId, int nodeId) {
+        throw new UnsupportedOperationException("MongoTransport is used through forSession(sessionKey)");
+    }
+
+    /** Refused: requests must go through forSession, which picks the client and so the cluster clock. */
+    @Override
+    public RequestHandle execute(int siteId, int nodeId, KvRequest request, long remainingDeadlineNanos,
+            Consumer<KvResponse> onResponse, Consumer<RpcFailure> onError) {
+        throw new UnsupportedOperationException("MongoTransport is used through forSession(sessionKey)");
+    }
+
+    /** One session's path: the shared transport with the client fixed. Closing it is the transport owner's job. */
+    private final class SessionView implements KvTransport {
+        private final int client;
+
+        SessionView(int client) {
+            this.client = client;
+        }
+
+        @Override
+        public int writeMajority() {
+            return MongoTransport.this.writeMajority();
+        }
+
+        @Override
+        public int numServers() {
+            return MongoTransport.this.numServers();
+        }
+
+        @Override
+        public int numSites() {
+            return MongoTransport.this.numSites();
+        }
+
+        @Override
+        public double queueWaitMs(int siteId, int nodeId) {
+            return siteEvents[siteId][client].checkoutWaitMs(nodeAddresses[nodeId]);
+        }
+
+        @Override
+        public RequestHandle execute(int siteId, int nodeId, KvRequest request, long remainingDeadlineNanos,
+                Consumer<KvResponse> onResponse, Consumer<RpcFailure> onError) {
+            return MongoTransport.this.execute(siteId, client, nodeId, request, remainingDeadlineNanos,
+                    onResponse, onError);
+        }
+
+        @Override
+        public void close() {
+            throw new UnsupportedOperationException("a session view does not own the MongoTransport");
+        }
+    }
+
+    /** Driver settings for one of a site's clients; the transport is the site's bound Netty channel. */
     static MongoClientSettings clientSettings(Settings settings, List<ServerAddress> seeds, TransportSettings transport,
             MongoDriverEvents events) {
         return MongoClientSettings.builder()
@@ -188,8 +272,8 @@ public final class MongoTransport implements KvTransport {
                 // maxConnecting defaults to 2 concurrent opens per pool, which under geo latency
                 // lets a far pool grow by only a few connections per second while checkouts queue
                 // behind the opens and time out; a pool must reach its demand within one open time.
-                .applyToConnectionPoolSettings(b -> b.maxSize(settings.maxPoolSize())
-                        .maxConnecting(settings.maxPoolSize())
+                .applyToConnectionPoolSettings(b -> b.maxSize(settings.poolSizePerClient())
+                        .maxConnecting(settings.poolSizePerClient())
                         .maxWaitTime(settings.poolWaitTimeoutMs(), TimeUnit.MILLISECONDS)
                         .addConnectionPoolListener(events))
                 .transportSettings(transport)
@@ -214,8 +298,8 @@ public final class MongoTransport implements KvTransport {
         return siteClients.length;
     }
 
-    @Override
-    public RequestHandle execute(int siteId, int nodeId, KvRequest request, long remainingDeadlineNanos,
+    /** KvTransport.execute on the site's {@code client}; reached through a SessionView. */
+    private RequestHandle execute(int siteId, int client, int nodeId, KvRequest request, long remainingDeadlineNanos,
             Consumer<KvResponse> onResponse, Consumer<RpcFailure> onError) {
         if (closed.get()) {
             onError.accept(new RpcFailure(Status.UNAVAILABLE.withDescription("mongo transport is closed"), 0));
@@ -240,9 +324,9 @@ public final class MongoTransport implements KvTransport {
         // reaches mongod, and while it waits it holds a queue slot that a request with
         // a longer deadline could have used. Only a pool that cannot grow is refused:
         // while it is still opening connections the wait is productive.
-        MongoDriverEvents events = siteEvents[siteId];
+        MongoDriverEvents events = siteEvents[siteId][client];
         String address = nodeAddresses[nodeId];
-        if (refuseForQueue(events, address, settings.maxPoolSize(), maxTimeMs)) {
+        if (refuseForQueue(events, address, settings.poolSizePerClient(), maxTimeMs)) {
             onError.accept(new RpcFailure(Status.DEADLINE_EXCEEDED.withDescription(
                     "connection pool at " + address + " is full and its checkout queue is "
                             + Math.round(events.checkoutWaitMs(address)) + " ms against " + maxTimeMs
@@ -262,18 +346,20 @@ public final class MongoTransport implements KvTransport {
         Document command = request.getIsRead()
                 ? findCommand(request, maxTimeMs, queueWaitMs)
                 : updateCommand(request, maxTimeMs, queueWaitMs);
-        Publisher<Document> publisher = siteDatabases[siteId].runCommand(command, nodePreferences[nodeId]);
+        Publisher<Document> publisher = siteDatabases[siteId][client].runCommand(command, nodePreferences[nodeId]);
 
-        CommandSubscriber subscriber = new CommandSubscriber(siteId, request, onResponse, onError);
+        CommandSubscriber subscriber = new CommandSubscriber(siteId, client, request, onResponse, onError);
         publisher.subscribe(subscriber);
         return subscriber::cancel;
     }
 
-    /** What the driver did to its cluster view during the run, per site; empty when nothing notable. */
+    /** What the driver did to its cluster view during the run, per site client; empty when nothing notable. */
     public String driverEventSummary() {
         StringBuilder sb = new StringBuilder();
-        for (MongoDriverEvents events : siteEvents) {
-            sb.append(events.summary());
+        for (MongoDriverEvents[] site : siteEvents) {
+            for (MongoDriverEvents events : site) {
+                sb.append(events.summary());
+            }
         }
         return sb.toString();
     }
@@ -283,8 +369,10 @@ public final class MongoTransport implements KvTransport {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        for (MongoClient client : siteClients) {
-            client.close();
+        for (MongoClient[] site : siteClients) {
+            for (MongoClient client : site) {
+                client.close();
+            }
         }
         eventLoopGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS);
     }
@@ -522,8 +610,9 @@ public final class MongoTransport implements KvTransport {
         return -1;
     }
 
-    private int leaderHint(int siteId) {
-        for (ServerDescription server : siteClients[siteId].getClusterDescription().getServerDescriptions()) {
+    /** The primary in the topology view of the client that carried the request. */
+    private int leaderHint(int siteId, int client) {
+        for (ServerDescription server : siteClients[siteId][client].getClusterDescription().getServerDescriptions()) {
             if (server.isPrimary()) {
                 return nodeIdOf(server.getAddress());
             }
@@ -541,7 +630,7 @@ public final class MongoTransport implements KvTransport {
                 .setDeadlineExceeded(true).build();
     }
 
-    private KvResponse errorReply(int siteId, KvRequest request, MongoCommandException e) {
+    private KvResponse errorReply(int siteId, int client, KvRequest request, MongoCommandException e) {
         KvResponse.Builder response = KvResponse.newBuilder().setRequestId(request.getRequestId()).setOk(false);
         BsonDocument raw = e.getResponse();
         BsonValue envelopeValue = raw == null ? null : raw.get(ENVELOPE_FIELD);
@@ -559,7 +648,7 @@ public final class MongoTransport implements KvTransport {
         }
         switch (e.getErrorCode()) {
             case NOT_WRITABLE_PRIMARY, NOT_PRIMARY_NO_SECONDARY_OK, NOT_PRIMARY_OR_SECONDARY -> {
-                return response.setNotLeader(true).setLeaderId(leaderHint(siteId)).build();
+                return response.setNotLeader(true).setLeaderId(leaderHint(siteId, client)).build();
             }
             case MAX_TIME_MS_EXPIRED -> {
                 return deadlineExceededReply(request);
@@ -572,6 +661,7 @@ public final class MongoTransport implements KvTransport {
 
     private final class CommandSubscriber implements Subscriber<Document> {
         private final int siteId;
+        private final int client;
         private final KvRequest request;
         private final Consumer<KvResponse> onResponse;
         private final Consumer<RpcFailure> onError;
@@ -579,9 +669,10 @@ public final class MongoTransport implements KvTransport {
         private volatile Subscription subscription;
         private volatile Document reply;
 
-        CommandSubscriber(int siteId, KvRequest request, Consumer<KvResponse> onResponse,
+        CommandSubscriber(int siteId, int client, KvRequest request, Consumer<KvResponse> onResponse,
                 Consumer<RpcFailure> onError) {
             this.siteId = siteId;
+            this.client = client;
             this.request = request;
             this.onResponse = onResponse;
             this.onError = onError;
@@ -617,7 +708,7 @@ public final class MongoTransport implements KvTransport {
             if (t instanceof MongoCommandException commandException) {
                 KvResponse mapped;
                 try {
-                    mapped = errorReply(siteId, request, commandException);
+                    mapped = errorReply(siteId, client, request, commandException);
                 } catch (RuntimeException translation) {
                     onError.accept(new RpcFailure(Status.INTERNAL.withDescription(translation.toString()), 0));
                     return;
