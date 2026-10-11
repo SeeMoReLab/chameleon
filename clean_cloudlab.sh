@@ -25,8 +25,9 @@
 #    or: ./clean_cloudlab.sh --hosts <hosts.txt> --key <key> [--dry-run] [--purge-incomplete]
 #   --dry-run           report what would be removed and exit without changing anything
 #   --purge-incomplete  also delete run directories that have no run_info.txt
-#   --site-subnet       the client site aliases a distributed run adds, so they can be
-#                       found and removed (default 10.99.0.0/24; match run_all_cloudlab.sh)
+#   --site-subnet       accepted for compatibility; the client site aliases and the servers'
+#                       routes to them are found by shape (a /32 and a via-route on the
+#                       experiment interface), so leftovers under any subnet are removed
 #
 set -euo pipefail
 
@@ -127,8 +128,12 @@ PATTERNS=(
     "org.example.Client.WorkloadDriver"
     "org.example.Client.MongoClusterAdmin"
     "org.example.Server.ServerNode"
+    "tuneable/app-all.jar"
     "tuneable/mongod --replSet"
     "tail -F .*tuneable/runs/.*/run.log"
+    # The per-node diagnostic sampler (diag_node.sh) polls top, ss and nstat
+    # every 5 s; left running it perturbs the next run.
+    "diag_node.sh"
 )
 
 list_pids() {
@@ -153,20 +158,26 @@ delay_ifaces() {
     # pfifo_fast/mq; net_apply.sh installs an htb root.
     local d
     for d in "${NET_IFACES[@]}"; do
-        tc qdisc show dev "$d" 2>/dev/null | grep -q 'htb' && echo "$d"
+        tc qdisc show dev "$d" 2>/dev/null | grep -qE 'htb|netem' && echo "$d"
     done
     return 0
 }
 site_aliases() {
     # The per-site source addresses the client machine carries during a
-    # distributed run, found by subnet rather than by count.
+    # distributed run: every /32 on the experiment interface, whatever subnet
+    # it is in. Finding them by the configured subnet alone missed the aliases
+    # an aborted run left under another subnet, which then hijacked that subnet
+    # when the machine served a later run (every connection from the new
+    # client's aliases was answered locally and failed).
     [[ -n "$LAN" && -n "${EXP_IFACE:-}" ]] || return 0
-    ip -o -4 addr show dev "$EXP_IFACE" | awk -v net="${SITE_SUBNET%.0/24}." '$4 ~ "^"net {print $4}'
+    ip -o -4 addr show dev "$EXP_IFACE" | awk '$4 ~ /\/32$/ {print $4}'
     return 0
 }
 site_routes() {
-    [[ -n "$LAN" ]] || return 0
-    ip -4 route show "$SITE_SUBNET" 2>/dev/null
+    # The servers' routes back to a client's site aliases: the only routes
+    # through a gateway on the experiment interface, whatever subnet.
+    [[ -n "$LAN" && -n "${EXP_IFACE:-}" ]] || return 0
+    ip -4 route show dev "$EXP_IFACE" 2>/dev/null | awk '$2 == "via" {print $1}'
     return 0
 }
 incomplete_runs() {
@@ -218,9 +229,13 @@ else
 fi
 ROUTES="$(site_routes)"
 if [[ -n "$ROUTES" ]]; then
-    echo "remote: routes to $SITE_SUBNET: $(echo $ROUTES)"
+    echo "remote: routes to client site aliases: $(echo $ROUTES)"
 else
-    echo "remote: no routes to $SITE_SUBNET"
+    echo "remote: no routes to client site aliases"
+fi
+if [[ -n "${EXP_IFACE:-}" ]]; then
+    MTU="$(cat "/sys/class/net/$EXP_IFACE/mtu")"
+    [[ "$MTU" == 9000 ]] || echo "remote: WARNING: $EXP_IFACE MTU is $MTU, not 9000; run_all_cloudlab.sh will refuse to start (setup_cloudlab.sh sets it)" >&2
 fi
 MONGO_DATA="$(mongo_data_dirs)"
 if [[ -n "$MONGO_DATA" ]]; then
@@ -271,9 +286,15 @@ for a in $ALIASES; do
     sudo ip addr del "$a" dev "$EXP_IFACE"
     echo "remote: removed client site alias $a"
 done
-if [[ -n "$ROUTES" ]]; then
-    sudo ip route del "$SITE_SUBNET" 2>/dev/null || true
-    echo "remote: removed the route to $SITE_SUBNET"
+for r in $ROUTES; do
+    sudo ip route del "$r" dev "$EXP_IFACE"
+    echo "remote: removed the route to $r"
+done
+if [[ -n "${EXP_IFACE:-}" && ( -n "$ALIASES" || -n "$ROUTES" ) ]]; then
+    # Neighbour entries learned while the aliases or routes were in place would
+    # otherwise outlive them.
+    sudo ip neigh flush dev "$EXP_IFACE"
+    echo "remote: flushed the neighbour cache on $EXP_IFACE"
 fi
 
 # --- Disk ---
@@ -297,7 +318,7 @@ LEFT="$(list_pids)"
 [[ -z "$LEFT" ]] || { echo "remote: VERIFY FAILED: processes still alive: $(echo $LEFT)" >&2; FAIL=1; }
 [[ -z "$(delay_ifaces)" ]] || { echo "remote: VERIFY FAILED: tc delay rules still present on $(delay_ifaces)" >&2; FAIL=1; }
 [[ -z "$(site_aliases)" ]] || { echo "remote: VERIFY FAILED: client site aliases remain" >&2; FAIL=1; }
-[[ -z "$(site_routes)" ]] || { echo "remote: VERIFY FAILED: routes to $SITE_SUBNET remain" >&2; FAIL=1; }
+[[ -z "$(site_routes)" ]] || { echo "remote: VERIFY FAILED: routes to client site aliases remain" >&2; FAIL=1; }
 [[ -z "$(mongo_data_dirs)" ]] || { echo "remote: VERIFY FAILED: mongo_data directories remain" >&2; FAIL=1; }
 [[ "$FAIL" == 0 ]] || exit 1
 echo "remote: clean; ready for the next run_all_cloudlab.sh"

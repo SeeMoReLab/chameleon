@@ -538,6 +538,11 @@ if [[ "$DISTRIBUTED" == 1 ]]; then
 set -euo pipefail
 IFACE="\$(ip -o -4 addr show | awk -v a="$1" '\$4 ~ "^"a"/" {print \$2; exit}')"
 [[ -n "\$IFACE" ]] || { echo "ERROR: no interface carries $1 on \$(hostname)" >&2; exit 1; }
+# A /32 on the experiment interface is a client site alias from an earlier run
+# that did not end cleanly. On a server it answers the new client's site
+# addresses locally, so every connection from them fails; refuse rather than run.
+STALE="\$(ip -o -4 addr show dev "\$IFACE" | awk '\$4 ~ /\\/32\$/ {print \$4}')"
+[[ -z "\$STALE" ]] || { echo "ERROR: \$(hostname) still carries client site alias(es) \$(echo \$STALE) on \$IFACE from an earlier run; run clean_cloudlab.sh on this allocation first" >&2; exit 1; }
 echo "experiment interface: \$IFACE ($1)"
 tc qdisc del dev "\$IFACE" root 2>/dev/null || true
 EOF
