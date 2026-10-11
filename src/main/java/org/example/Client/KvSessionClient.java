@@ -245,12 +245,25 @@ public final class KvSessionClient implements AutoCloseable {
         RungScorer.Rung targetRung = null;
         double predicted = 0;
         boolean targetFeasible = true;
+        // The level the selector routed for when the server decides the level:
+        // not sent to the server, only graded against (see dispatch).
+        int routedStrength = -1;
         switch (mode) {
             case CHAMELEON -> targetNode = lowestRttNode(admitRates);
             case CHAMELEON_PILEUS -> {
                 PileusSelector.Choice choice = selector.chooseRead(sla, sessionIndex, leaderHint,
                         admitRates);
-                targetNode = choice == null ? lowestRttNode(admitRates) : choice.node();
+                if (choice == null) {
+                    targetNode = lowestRttNode(admitRates);
+                } else {
+                    targetNode = choice.node();
+                    // The selector picked this server for this rung; whether the
+                    // server then delivers it is the delivery feedback the selector
+                    // runs on (PileusSelector.observeReadDelivery). Without it the
+                    // selector rated the primary as a certain linearizable server
+                    // for every read, whatever the server actually chose there.
+                    routedStrength = sla.get(choice.rungIndex()).strength();
+                }
             }
             case PILEUS -> {
                 PileusSelector.Choice choice = selector.chooseRead(sla, sessionIndex, leaderHint,
@@ -286,7 +299,7 @@ public final class KvSessionClient implements AutoCloseable {
         }
         dispatch(request.build(), targetNode, 1, predicted,
                 targetRung == null ? 0 : targetRung.thresholdMs(),
-                targetRung == null ? -1 : targetRung.strength(),
+                targetRung == null ? routedStrength : targetRung.strength(),
                 !targetFeasible);
     }
 

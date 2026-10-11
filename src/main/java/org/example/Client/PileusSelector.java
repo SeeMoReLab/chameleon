@@ -129,8 +129,10 @@ final class PileusSelector {
 
     /**
      * A targeted read was served and graded: {@code delivered} says whether
-     * the graded level reached the target. Only pileus-mode reads carry a
-     * client target, so only they feed this.
+     * the graded level reached the target. In pileus mode the target is the
+     * rung the client asked for; in chameleonPileus mode it is the rung the
+     * selector routed for while the server chose the level, so the selector
+     * learns what each server actually delivers for it.
      */
     void observeReadDelivery(int node, int targetStrength, boolean delivered) {
         if (targetStrength < 0 || targetStrength >= deliveryAttempts[node].length) {
