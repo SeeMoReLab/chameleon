@@ -194,7 +194,6 @@ public final class KvIngressServer implements AutoCloseable {
             // mean stays a mean over the frames it claims to cover.
             metrics.ingressAgeAccepted(ingressAgeNanos);
             metrics.rpcOpened();
-            plane.requestAdmitted();
             FramedResponse response = new FramedResponse(ctx.channel(), accepted, correlationId,
                     clientSendEpochMs, deadlineEpochMs, receivedNanos);
             if (accepted.putIfAbsent(correlationId, response) != null) {
@@ -240,6 +239,10 @@ public final class KvIngressServer implements AutoCloseable {
         private final long deadlineEpochMs;
         private final long receivedNanos;
         private final AtomicBoolean finished = new AtomicBoolean();
+        // True once step 5 admitted the request, which opens its occupancy slot backdated to
+        // receivedNanos. Guarded by this, together with the slot open and close, so a cancel
+        // racing an admission can neither leak a slot nor close one that was never opened.
+        private boolean admitted;
 
         private FramedResponse(Channel channel, ConcurrentHashMap<Long, FramedResponse> owner,
                 long correlationId, long clientSendEpochMs, long deadlineEpochMs, long receivedNanos) {
@@ -264,6 +267,20 @@ public final class KvIngressServer implements AutoCloseable {
         @Override
         public double ingressElapsedMs() {
             return Math.max(0, System.currentTimeMillis() - clientSendEpochMs);
+        }
+
+        @Override
+        public void admitted() {
+            synchronized (this) {
+                if (admitted) {
+                    throw new IllegalStateException("request " + correlationId + " admitted twice");
+                }
+                if (finished.get()) {
+                    return; // cancelled before admission: nothing to hold
+                }
+                admitted = true;
+                plane.requestAdmitted(Math.max(0, System.nanoTime() - receivedNanos));
+            }
         }
 
         @Override
@@ -301,8 +318,11 @@ public final class KvIngressServer implements AutoCloseable {
                 return false;
             }
             owner.remove(correlationId, this);
-            double serviceTimeMs = (System.nanoTime() - receivedNanos) / 1_000_000.0;
-            plane.requestCompleted(serviceTimeMs);
+            synchronized (this) {
+                if (admitted) {
+                    plane.requestCompleted((System.nanoTime() - receivedNanos) / 1_000_000.0);
+                }
+            }
             release();
             metrics.headerReleased();
             metrics.rpcClosed();

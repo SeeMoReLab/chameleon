@@ -71,9 +71,10 @@ public final class MeasurementPlane implements AutoCloseable {
     private final OccupancyMeter occupancy = new OccupancyMeter();
     private final ServerDrainMetrics drainMetrics;
 
-    // Cross-check: completed callback service excludes pre-callback queueing,
-    // while the authoritative occupancy integral includes it. The two agree
-    // when callback queueing is negligible, apart from interval boundaries.
+    // Cross-check: the sum of t_recv-to-reply times of the admitted requests
+    // that completed in the interval, against the authoritative occupancy
+    // integral over the same slots. The two agree apart from interval
+    // boundaries; refused frames are in neither.
     private final DoubleAdder completedServiceMsInterval = new DoubleAdder();
 
     private final AtomicLong cumulativeSlotNanos = new AtomicLong();
@@ -128,9 +129,12 @@ public final class MeasurementPlane implements AutoCloseable {
 
     // ===== Hot path =====
 
-    /** An ingress-admitted frame holds a slot from here through its terminal reply. */
-    public void requestAdmitted() {
-        occupancy.onEvent(1);
+    /**
+     * Step 5's on_event(+1) for a request admitted to execution after waiting {@code waitedNanos}
+     * since t_recv: the wait is credited and the slot stays open through the terminal reply.
+     */
+    public void requestAdmitted(long waitedNanos) {
+        occupancy.onAdmitted(waitedNanos);
     }
 
     ServerDrainMetrics drainMetrics() {

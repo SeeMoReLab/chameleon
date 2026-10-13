@@ -15,13 +15,17 @@ import org.slf4j.LoggerFactory;
 
 /**
  * The client-facing execution path behind the framed transport admission
- * gate. The ingress event loop opens occupancy before protobuf parsing and
- * closes it at the terminal reply. The rung scorer
- * considers the legal levels for this node and
- * operation are scored against the registered SLA (steps 2-4), the best
- * scoring level wins, and requests worth less than the capacity they consume
- * are rejected (step 5). There are no modes anywhere: degradation under load
- * comes from the shadow price lambda rising, not from anything flipping.
+ * gate. The legal levels for this node and operation are scored against the
+ * registered SLA (steps 2-4), the best scoring level wins, and requests worth
+ * less than the capacity they consume are rejected (step 5). A request opens
+ * its occupancy slot at that admission, backdated to its socket receipt so
+ * the queueing of admitted work stays priced, and holds it until the
+ * terminal reply. A frame the scorer, the replication bucket or the
+ * admission queue refuses never counts as occupancy, so under arrival
+ * overload the backlog of frames waiting to be refused cannot keep the
+ * utilization above target and pin the price at its ceiling on its own.
+ * There are no modes anywhere: degradation under load comes from the shadow
+ * price lambda rising, not from anything flipping.
  *
  * The framed transport applies the hard occupancy cap before protobuf
  * parsing, then places accepted work into a bounded service-wide queue. SLA
@@ -161,6 +165,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
                 handleRead(request, tRecvNanos, out);
             } else {
                 plane.drainMetrics().executionAdmitted();
+                out.admitted();
                 dumbRead(request, tRecvNanos, out);
             }
         } else {
@@ -248,6 +253,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
             return;
         }
         plane.drainMetrics().executionAdmitted();
+        out.admitted();
         int index;
         try {
             index = node.appendWrite(request.getKey(), request.getValue(),
@@ -413,6 +419,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         }
 
         plane.drainMetrics().executionAdmitted();
+        out.admitted();
         executeRead(request, tRecvNanos, out, chosen);
     }
 
@@ -537,6 +544,7 @@ public final class KvClientService implements KvRequestHandler, AutoCloseable {
         }
 
         plane.drainMetrics().executionAdmitted();
+        out.admitted();
         int writeConcern = chosen.levelIndex;
         int index;
         try {

@@ -52,6 +52,26 @@ class OccupancyMeterTest {
     }
 
     @Test
+    void admissionCreditsTheWaitAndRefusedFramesHoldNothing() {
+        // A frame received at 0 and admitted at 20 ms holds its slot from 0: the 20 ms wait
+        // is credited at admission, then the slot runs to the reply at 50 ms. A frame
+        // refused before admission never touches the meter.
+        AtomicLong clock = new AtomicLong(0);
+        OccupancyMeter meter = new OccupancyMeter(clock::get);
+
+        clock.set(20_000_000L);
+        meter.onAdmitted(20_000_000L);
+        assertEquals(1, meter.inFlight());
+        clock.set(50_000_000L);
+        meter.onEvent(-1);
+        clock.set(100_000_000L);
+
+        OccupancyMeter.Interval interval = meter.closeInterval();
+        assertEquals(50_000_000L, interval.slotNanos(), "20 ms credited wait + 30 ms in flight");
+        assertEquals(0, interval.inFlightAtClose());
+    }
+
+    @Test
     void sumOfPerRequestSlotTimesEqualsTheIntegral() {
         // Interleaved requests: the accumulator must equal the sum of each
         // request's individual residence time.

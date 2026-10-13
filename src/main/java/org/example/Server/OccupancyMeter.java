@@ -41,6 +41,21 @@ public final class OccupancyMeter {
     }
 
     /** +1 on admission, -1 on reply. */
+    /**
+     * Step 5 admission of a request that has already waited {@code waitedNanos} since it came
+     * off the socket (parsing and the admission queue): the wait is credited to the slot time
+     * as if the slot had been open throughout, then the slot opens. An admitted request thus
+     * holds its slot from t_recv to reply, as the calibration of S_max assumes, while a frame
+     * refused before admission never calls this and holds nothing.
+     */
+    public synchronized void onAdmitted(long waitedNanos) {
+        if (waitedNanos < 0) {
+            throw new IllegalArgumentException("waited time must not be negative, got " + waitedNanos);
+        }
+        accumulatedSlotNanos += waitedNanos;
+        onEvent(1);
+    }
+
     public synchronized void onEvent(int delta) {
         long t = clock.getAsLong();
         accumulatedSlotNanos += (long) inFlight * (t - lastEventNanos);
