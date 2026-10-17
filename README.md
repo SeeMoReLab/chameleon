@@ -576,7 +576,7 @@ bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/clo
 <!-- MongoDB repeats under other seeds, as for the Java store -->
 bash run_all_cloudlab_sweep.sh kevindmw@clnode355.clemson.cloudlab.us ~/.ssh/cloudlab --modes "weakest;strongest;pileus;chameleon" --smax "450" --seeds "7;100" "config_loadsweep_mongodb.yaml;config_global_mongodb.yaml"
 
-<!-- Utah c6525-25g, one machine per process, 2026-09-24 to 2026-09-27: the sweep RESULTS.md reports.
+<!-- Utah c6525-25g, one machine per process, 2026-09-24 to 2026-09-27: the final sweep.
      Two allocations (hosts.txt for the Java store, hosts_2.txt for mongod), each after setup_cloudlab.sh and,
      for mongod, build_cloudlab.sh. No --smax: the configs carry the calibrated value. 45 runs per store. -->
 bash run_all_cloudlab_sweep.sh --hosts hosts.txt --key ~/.ssh/cloudlab --modes "chameleon;chameleonPileus;pileus;strongest;weakest" --seeds "42;7;100" "config_local.yaml;config_regional.yaml;config_global.yaml"
@@ -638,4 +638,4 @@ All six capacities and budgets in MONGODB_BASELINES.md 3l were measured on the s
 
 ## Results
 
-RESULTS.md holds every finished run under `results/`, one section per subfolder (failure, mongodb, mongodb_scalability, raft, raft_scalability, random) and one subsection per (type, arm) of the plan with its seed completeness, averaged over the seeds found: a per-phase table, a per-sub-SLA table per phase, and whole-run tables with and without WarmUp and CoolDown, after a table comparing the arms of each type. It is generated: after adding or removing run directories under `results/`, run `python3 results_md.py > RESULTS.md`. `analyze_runs.py` gives the pooled latency percentiles and counters for one config across modes and seeds, and `analyze_run.py` the detail of a single run.
+Every finished run lives under `results/`, one subfolder per family (failure, mongodb, mongodb_scalability, raft, raft_scalability, random) and one run folder per (config, arm, sMax, seed), named `<config>_<arm>_<sMax>_<seed>`, holding the driver's run.log, the client ledger, and the occupancy and drain streams the sweep fetched. `analyze_runs.py` gives the pooled latency percentiles and counters for one config across modes and seeds, and `analyze_run.py` the detail of a single run.

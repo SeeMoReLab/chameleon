@@ -1,6 +1,6 @@
 # MongoDB performance baselines
 
-Reference numbers for the MongoDB port, all measured on 2026-09-16 on one CloudLab node (clnode355, Clemson: AMD EPYC 9354P, 32 cores / 64 hardware threads, 188 GB RAM, NVMe, Ubuntu 24.04, kernel 6.8), with every process on that node. Run directories are under `runs/` and the closed-loop benchmark artifacts under the node's `~/bench/`. MONGODB_PORT.md holds the narrative; this file holds the tables. The final experiment ran later on Utah c6525-25g machines, one per process, with its own calibration (CALIBRATION.md, *Hardware*) and results (RESULTS.md); none of the numbers below carry over to it.
+Reference numbers for the MongoDB port, all measured on 2026-09-16 on one CloudLab node (clnode355, Clemson: AMD EPYC 9354P, 32 cores / 64 hardware threads, 188 GB RAM, NVMe, Ubuntu 24.04, kernel 6.8), with every process on that node. Run directories are under `runs/` and the closed-loop benchmark artifacts under the node's `~/bench/`. MONGODB_PORT.md holds the narrative; this file holds the tables. The final experiment ran later on Utah c6525-25g machines, one per process, with its own calibration (CALIBRATION.md, *Hardware*) and its own results; none of the numbers below carry over to it.
 
 ## Binaries
 
