@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Generate a random-SLA experiment config from the local Java-store config.
+"""Generate a random-SLA experiment config from the local config of either store.
 
 config_random_<seed>.yaml is config_local.yaml (five nodes, local delay, C, sMax, the cap
-and the budgets as calibrated) with three things replaced:
+and the budgets as calibrated) with three things replaced; with --base
+config_local_mongodb.yaml the output is config_random_mongodb_<seed>.yaml, the same drawn
+SLAs (the draw depends on the seed alone) on the mongod base:
 
 - the SLA table: one application with one read SLA and one write SLA, each of the
-  requested number of rungs (1 to 4) drawn at random from the ladders below;
+  requested number of rungs (1 to 4) drawn at random from the ranges below;
 - the mixes: one per requested write percentage, reads being the rest;
 - the phases: a 30 s warm-up at the first mix, one phase per write percentage at 1 C
   (read off the base's phase marked "# 1C"), then a 30 s cool-down at the last mix.
 
-A rung is (level or concern, latency target, profit), each drawn uniformly from its
-ladder. An SLA's rungs are drawn together, and the whole set is drawn again until it
+A rung is (level or concern, latency target, profit). The level or concern is drawn
+uniformly from its list; the latency target and the profit are drawn log-uniformly from
+their ranges, so every factor of two within a range is equally likely (a linear uniform
+draw over 20 to 2,000 ms would put nine targets in ten above 200 ms), then rounded to
+whole milliseconds and to cents. An SLA's rungs are drawn together, and the whole set is drawn again until it
 makes sense: whenever one rung is at least as demanding as another on both dimensions
 (consistency not weaker, latency target not longer) and strictly more demanding on at
 least one, it must pay strictly more. Two rungs
@@ -29,18 +34,20 @@ Validate the result the way every config is validated:
 """
 
 import argparse
+import math
+import os
 import random
 import re
 import sys
 from collections import namedtuple
 
-BASE = "config_local.yaml"
+BASE = "config_local.yaml"           # default base; --base config_local_mongodb.yaml gives the mongod twin
 NUM_SERVERS = 5                  # the base's cluster; write concerns range over 1..majority
 MAJORITY = NUM_SERVERS // 2 + 1
 READ_LEVELS = ["EVENTUAL_LOCAL", "EVENTUAL_MAJORITY", "CAUSAL_LOCAL", "CAUSAL_MAJORITY", "LINEARIZABLE"]
-LATENCY_MS = [20, 40, 60, 100, 150, 200, 300, 400, 600, 800, 1000, 1500, 2000]
-WRITE_MIN_LATENCY_MS = 40        # the hand-written local SLAs give no write less than this
-PROFIT = [0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150]
+READ_LATENCY_MS = (20, 2000)     # the span of the hand-written local SLAs' targets
+WRITE_LATENCY_MS = (40, 2000)    # the hand-written local SLAs give no write less than 40 ms
+PROFIT = (0.5, 150)
 MAX_RUNGS = 4                    # the client ledger's satisfied-rung columns are fixed
 WARMUP_S = 30
 COOLDOWN_S = 30
@@ -53,9 +60,20 @@ Rung = namedtuple("Rung", "strength latency profit")
 def replace_once(text, pattern, replacement, what):
     matches = list(re.finditer(pattern, text, flags=re.MULTILINE))
     if len(matches) != 1:
-        sys.exit(f"{what}: expected exactly one match in {BASE}, found {len(matches)}")
+        sys.exit(f"{what}: expected exactly one match in the base config, found {len(matches)}")
     m = matches[0]
     return text[:m.start()] + replacement + text[m.end():]
+
+
+def log_uniform(rng, bounds):
+    lo, hi = bounds
+    return math.exp(rng.uniform(math.log(lo), math.log(hi)))
+
+
+def draw_rung(rng, strengths, latency_bounds):
+    # Rounded before the consistency check, so the check sees the values written out.
+    return Rung(rng.choice(strengths), round(log_uniform(rng, latency_bounds)),
+                round(log_uniform(rng, PROFIT), 2))
 
 
 def at_least_as_demanding(a, b):
@@ -75,13 +93,13 @@ def may_share_an_sla(a, b):
     return True  # incomparable: one is stronger, the other faster
 
 
-def draw_sla(rng, count, strengths, latencies, what):
+def draw_sla(rng, count, strengths, latency_bounds, what):
     """Draw the rungs together and keep the set only if every pair obeys the rule, else draw
     the whole set again, so every consistent SLA is equally likely. Redrawing one rung at a
     time cannot work: a first draw of the most demanding rung at the lowest profit leaves no
     second rung that could ever be consistent with it."""
     for _ in range(MAX_DRAWS):
-        rungs = [Rung(rng.choice(strengths), rng.choice(latencies), rng.choice(PROFIT)) for _ in range(count)]
+        rungs = [draw_rung(rng, strengths, latency_bounds) for _ in range(count)]
         if all(may_share_an_sla(a, b) for i, a in enumerate(rungs) for b in rungs[i + 1:]):
             rungs.sort(key=lambda r: (-r.strength, r.latency))  # strongest first, like the hand-written SLAs
             return rungs
@@ -99,10 +117,11 @@ def rungs_yaml(rungs, is_read):
 def slas_block(seed, read_rungs, write_rungs):
     return ("slas:\n"
             f"  # Random SLAs (make_random_config.py, seed {seed}): one application with one read SLA of\n"
-            f"  # {len(read_rungs)} rungs and one write SLA of {len(write_rungs)} rungs. The rungs are drawn uniformly from the\n"
-            "  # generator's ladders, together, and the set is redrawn until in every pair the rung\n"
-            "  # at least as demanding on both dimensions (consistency, latency target) and stricter\n"
-            "  # on one pays strictly more; equal demands are a duplicate. Written strongest first.\n"
+            f"  # {len(read_rungs)} rungs and one write SLA of {len(write_rungs)} rungs. The rungs are drawn together (levels or concerns\n"
+            "  # uniformly, latency targets and profits log-uniformly over the generator's ranges),\n"
+            "  # and the set is redrawn until in every pair the rung at least as demanding on both\n"
+            "  # dimensions (consistency, latency target) and stricter on one pays strictly more;\n"
+            "  # equal demands are a duplicate. Written strongest first.\n"
             "  - applicationId: 1\n"
             "    read:\n      - slaId: 1\n        rungs:\n" + rungs_yaml(read_rungs, True)
             + "    write:\n      - slaId: 1\n        rungs:\n" + rungs_yaml(write_rungs, False))
@@ -136,26 +155,33 @@ def mixes_and_phases(write_rates, duration, tps):
 def derive(base_text, args, read_rungs, write_rungs):
     m = re.search(r"^\s+totalTPS: (\d+)\s*# 1C\b", base_text, flags=re.MULTILINE)
     if not m:
-        sys.exit(f"no phase marked '# 1C' in {BASE}, so C cannot be read off it")
+        sys.exit(f"no phase marked '# 1C' in {args.base}, so C cannot be read off it")
     tps = int(m.group(1))
 
     text = replace_once(base_text, r"^seed: \d+\n", f"seed: {args.seed}\n", "seed")
     text = replace_once(text, r"^slas:\n(?:(?:  .*|)\n)+?(?=^# Failure injection)",
                         slas_block(args.seed, read_rungs, write_rungs) + "\n", "slas")
-    text = replace_once(text, r"^  mixes:\n(?:(?:  .*|)\n)+?(?=^# Which store)",
+    text = replace_once(text, r"^  mixes:\n(?:(?:  .*|)\n)+?(?=^#)",
                         mixes_and_phases(args.write_rate, args.duration, tps), "workload.mixes and workload.phases")
 
+    m = re.search(r"^transport: (\w+)", base_text, flags=re.MULTILINE)
+    if not m:
+        sys.exit(f"no 'transport:' line in {args.base}")
+    store = {"framed": "Java store", "mongodb": "mongod store"}.get(m.group(1))
+    if store is None:
+        sys.exit(f"unknown transport '{m.group(1)}' in {args.base}")
     rates = ";".join(str(p) for p in args.write_rate)
     percent_list = ", ".join(f"{p}%" for p in args.write_rate)
+    base_flag = "" if args.base == BASE else f" --base {args.base}"
     header = [
-        f"# GENERATED by make_random_config.py from {BASE}; do not edit by hand, rerun the generator:",
+        f"# GENERATED by make_random_config.py from {args.base}; do not edit by hand, rerun the generator:",
         f"#   python3 make_random_config.py --seed {args.seed} --read {args.read} --write {args.write}"
-        f" --write-rate \"{rates}\" --duration {args.duration}",
+        f" --write-rate \"{rates}\" --duration {args.duration}{base_flag}",
         f"# Random SLAs: one application with a {args.read}-rung read SLA and a {args.write}-rung write SLA drawn with",
         f"# seed {args.seed} under the rule that a rung at least as demanding as another on both dimensions pays",
         f"# strictly more. The workload is a {WARMUP_S} s warm-up, then {args.duration} s each at {percent_list} writes,",
         f"# all at 1C ({tps:,}/s), then a {COOLDOWN_S} s cool-down. Topology, C, sMax, the cap and the budgets are",
-        "# the five-node local base's. Java store.",
+        f"# the five-node local base's. {store}.",
     ]
     return "\n".join(header) + "\n\n" + text
 
@@ -196,18 +222,24 @@ def parse_args():
     parser.add_argument("--write-rate", type=write_rates, default=[20, 50, 80],
                         help="write percentages, one phase each, in order (default \"20;50;80\")")
     parser.add_argument("--duration", type=positive_int, default=300, help="seconds per write-rate phase (default 300)")
-    return parser.parse_args()
+    parser.add_argument("--base", default=BASE,
+                        help=f"base config, config_local.yaml or config_local_mongodb.yaml (default {BASE}); the output "
+                             "name replaces its 'config_local' with 'config_random' and appends the seed")
+    args = parser.parse_args()
+    if not os.path.basename(args.base).startswith("config_local"):
+        parser.error(f"--base must be a config_local*.yaml file, got {args.base}")
+    return args
 
 
 def main():
     args = parse_args()
     rng = random.Random(args.seed)
-    read_rungs = draw_sla(rng, args.read, list(range(len(READ_LEVELS))), LATENCY_MS, "read SLA")
-    write_rungs = draw_sla(rng, args.write, list(range(1, MAJORITY + 1)),
-                           [ms for ms in LATENCY_MS if ms >= WRITE_MIN_LATENCY_MS], "write SLA")
-    with open(BASE) as f:
+    read_rungs = draw_sla(rng, args.read, list(range(len(READ_LEVELS))), READ_LATENCY_MS, "read SLA")
+    write_rungs = draw_sla(rng, args.write, list(range(1, MAJORITY + 1)), WRITE_LATENCY_MS, "write SLA")
+    with open(args.base) as f:
         base_text = f.read()
-    out_name = f"config_random_{args.seed}.yaml"
+    stem = os.path.basename(args.base)[:-len(".yaml")].replace("config_local", "config_random", 1)
+    out_name = f"{stem}_{args.seed}.yaml"
     with open(out_name, "w") as f:
         f.write(derive(base_text, args, read_rungs, write_rungs))
     print(f"wrote {out_name}")
