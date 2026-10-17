@@ -8,9 +8,9 @@
 # Format: one role per line, blank lines and '#' comments ignored.
 #
 #     # role    ssh target                                lan ip
-#     client    kevindmw@clnode355.clemson.cloudlab.us     10.10.1.1
-#     server    kevindmw@clnode356.clemson.cloudlab.us     10.10.1.2
-#     server    kevindmw@clnode357.clemson.cloudlab.us     10.10.1.3
+#     client    user@host1.cloudlab.us     10.10.1.1
+#     server    user@host2.cloudlab.us     10.10.1.2
+#     server    user@host3.cloudlab.us     10.10.1.3
 #
 # Exactly one client line and at least one server line. The ssh target is how
 # this laptop reaches the machine (a public CloudLab name); the LAN IP is how
