@@ -1,0 +1,539 @@
+=== Experiment client starting on node0.kevindmw-319634.adaptivetimer-pg0.utah.cloudlab.us (label: config_scale_mongodb_15_pileus_180_42) ===
+=== Working directory: /users/kevindmw/tuneable/runs/config_scale_mongodb_15_pileus_180_42_20261011_020607 ===
+
+Open-file limit: 262144
+All 15 mongods accepting connections
+replSetInitiate sent to 10.10.1.2:27017
+Replica set rs0 ready: 15 members, primary is node 0
+replica set ready, primary is node 0
+Replica set rs0 ready: 15 members, primary is node 0
+loaded 100000 documents into chameleon.kv with w:majority
+Loaded config from /users/kevindmw/tuneable/runs/config_scale_mongodb_15_pileus_180_42_20261011_020607/config.yaml
+Replica set rs0 ready: 15 members, primary is node 0
+Chameleon parameters applied to 15 nodes (serverDecision=false)
+Started 4 applications x 60 sessions (240 session clients) across 3 client sites [az0, az1, az2] (per-site source IPs bound)
+Waiting for leader election...
+Leader elected: server 0
+Starting phased workload experiment...
+
+Experiment Configuration:
+   Total Duration: 1860 seconds
+   1. WarmUp: 30s | TotalTPS=45000 | ReadShare=87% | Mix=normal
+   2. NormalDay: 300s | TotalTPS=45000 | ReadShare=87% | Mix=normal
+   3. HolidayPlateau: 300s | TotalTPS=72000 | ReadShare=87% | Mix=holiday
+   4. SaleDay: 300s | TotalTPS=162000 | ReadShare=77% | Mix=saleDay
+   5. PreFlash: 120s | TotalTPS=90000 | ReadShare=75% | Mix=preFlash
+   6. Flash: 60s | TotalTPS=225000 | ReadShare=73% | Mix=flash
+   7. Collapse: 120s | TotalTPS=63000 | ReadShare=81% | Mix=collapse
+   8. Payday: 300s | TotalTPS=54000 | ReadShare=82% | Mix=payday
+   9. ReturnToNormal: 300s | TotalTPS=45000 | ReadShare=87% | Mix=normal
+   10. CoolDown: 30s | TotalTPS=45000 | ReadShare=87% | Mix=normal
+
+
+========================================
+Starting Phase 1/10: WarmUp
+   Duration: 30s | Total TPS: 45000 | Read share: 87%
+   Mix 'normal': app1/read/sla1=32.0%, app1/read/sla2=4.0%, app1/write/sla1=4.0%, app2/read/sla1=33.0%, app2/write/sla1=2.0%, app3/read/sla1=14.0%, app3/write/sla1=6.0%, app4/read/sla1=4.0%, app4/write/sla1=1.0%
+========================================
+[05s] Sent=191700 | Skipped=31200 | Served=190446 | Rejected=251 | Lost=0 | Violations=860 | PredictedProfit=2060022 | RealizedProfit=2176086 | Phase=WarmUp | TotalTPS=45000
+[10s] Sent=225000 | Skipped=0 | Served=221613 | Rejected=2055 | Lost=0 | Violations=1480 | PredictedProfit=2375216 | RealizedProfit=2519802 | Phase=WarmUp | TotalTPS=45000
+[15s] Sent=225000 | Skipped=0 | Served=223299 | Rejected=1005 | Lost=0 | Violations=696 | PredictedProfit=2394261 | RealizedProfit=2535253 | Phase=WarmUp | TotalTPS=45000
+[20s] Sent=225000 | Skipped=0 | Served=223677 | Rejected=1009 | Lost=0 | Violations=314 | PredictedProfit=2417821 | RealizedProfit=2561773 | Phase=WarmUp | TotalTPS=45000
+[25s] Sent=225056 | Skipped=0 | Served=223662 | Rejected=1046 | Lost=0 | Violations=296 | PredictedProfit=2413417 | RealizedProfit=2552695 | Phase=WarmUp | TotalTPS=45000
+[30s] Sent=225126 | Skipped=0 | Served=220952 | Rejected=2673 | Lost=0 | Violations=1473 | PredictedProfit=2385435 | RealizedProfit=2534956 | Phase=WarmUp | TotalTPS=45000
+
+========================================
+Starting Phase 2/10: NormalDay
+   Duration: 300s | Total TPS: 45000 | Read share: 87%
+   Mix 'normal': app1/read/sla1=32.0%, app1/read/sla2=4.0%, app1/write/sla1=4.0%, app2/read/sla1=33.0%, app2/write/sla1=2.0%, app3/read/sla1=14.0%, app3/write/sla1=6.0%, app4/read/sla1=4.0%, app4/write/sla1=1.0%
+========================================
+[35s] Sent=224994 | Skipped=0 | Served=224587 | Rejected=309 | Lost=0 | Violations=122 | PredictedProfit=2444809 | RealizedProfit=2588105 | Phase=NormalDay | TotalTPS=45000
+[40s] Sent=225353 | Skipped=0 | Served=225064 | Rejected=35 | Lost=0 | Violations=188 | PredictedProfit=2448405 | RealizedProfit=2591218 | Phase=NormalDay | TotalTPS=45000
+[45s] Sent=225203 | Skipped=0 | Served=224976 | Rejected=27 | Lost=0 | Violations=163 | PredictedProfit=2441903 | RealizedProfit=2580838 | Phase=NormalDay | TotalTPS=45000
+[50s] Sent=225146 | Skipped=0 | Served=224421 | Rejected=607 | Lost=0 | Violations=126 | PredictedProfit=2450884 | RealizedProfit=2589351 | Phase=NormalDay | TotalTPS=45000
+[55s] Sent=225152 | Skipped=0 | Served=224717 | Rejected=269 | Lost=0 | Violations=185 | PredictedProfit=2454519 | RealizedProfit=2592459 | Phase=NormalDay | TotalTPS=45000
+[60s] Sent=224897 | Skipped=0 | Served=224602 | Rejected=112 | Lost=0 | Violations=148 | PredictedProfit=2460328 | RealizedProfit=2593822 | Phase=NormalDay | TotalTPS=45000
+[65s] Sent=225644 | Skipped=0 | Served=225158 | Rejected=271 | Lost=0 | Violations=83 | PredictedProfit=2460494 | RealizedProfit=2594228 | Phase=NormalDay | TotalTPS=45000
+[70s] Sent=225590 | Skipped=0 | Served=224129 | Rejected=979 | Lost=0 | Violations=314 | PredictedProfit=2412959 | RealizedProfit=2552460 | Phase=NormalDay | TotalTPS=45000
+[75s] Sent=225223 | Skipped=0 | Served=224820 | Rejected=143 | Lost=0 | Violations=206 | PredictedProfit=2456465 | RealizedProfit=2592401 | Phase=NormalDay | TotalTPS=45000
+[80s] Sent=225413 | Skipped=0 | Served=224932 | Rejected=297 | Lost=0 | Violations=194 | PredictedProfit=2448279 | RealizedProfit=2585386 | Phase=NormalDay | TotalTPS=45000
+[85s] Sent=225203 | Skipped=0 | Served=225117 | Rejected=316 | Lost=0 | Violations=159 | PredictedProfit=2443165 | RealizedProfit=2582498 | Phase=NormalDay | TotalTPS=45000
+[90s] Sent=225000 | Skipped=0 | Served=224855 | Rejected=139 | Lost=0 | Violations=149 | PredictedProfit=2467442 | RealizedProfit=2602618 | Phase=NormalDay | TotalTPS=45000
+[95s] Sent=225000 | Skipped=0 | Served=224821 | Rejected=36 | Lost=0 | Violations=143 | PredictedProfit=2451692 | RealizedProfit=2588849 | Phase=NormalDay | TotalTPS=45000
+[100s] Sent=225000 | Skipped=0 | Served=223947 | Rejected=870 | Lost=0 | Violations=183 | PredictedProfit=2434051 | RealizedProfit=2569651 | Phase=NormalDay | TotalTPS=45000
+[105s] Sent=225000 | Skipped=0 | Served=224576 | Rejected=224 | Lost=0 | Violations=200 | PredictedProfit=2447067 | RealizedProfit=2583347 | Phase=NormalDay | TotalTPS=45000
+[110s] Sent=225024 | Skipped=0 | Served=223809 | Rejected=944 | Lost=0 | Violations=247 | PredictedProfit=2438199 | RealizedProfit=2576343 | Phase=NormalDay | TotalTPS=45000
+[115s] Sent=225125 | Skipped=0 | Served=224868 | Rejected=43 | Lost=0 | Violations=137 | PredictedProfit=2439714 | RealizedProfit=2576556 | Phase=NormalDay | TotalTPS=45000
+[120s] Sent=225102 | Skipped=0 | Served=224910 | Rejected=21 | Lost=0 | Violations=180 | PredictedProfit=2463128 | RealizedProfit=2599813 | Phase=NormalDay | TotalTPS=45000
+[125s] Sent=225060 | Skipped=0 | Served=224512 | Rejected=348 | Lost=0 | Violations=233 | PredictedProfit=2436409 | RealizedProfit=2573836 | Phase=NormalDay | TotalTPS=45000
+[130s] Sent=225104 | Skipped=0 | Served=224651 | Rejected=224 | Lost=0 | Violations=196 | PredictedProfit=2440327 | RealizedProfit=2575905 | Phase=NormalDay | TotalTPS=45000
+[135s] Sent=225113 | Skipped=0 | Served=224821 | Rejected=174 | Lost=0 | Violations=111 | PredictedProfit=2441137 | RealizedProfit=2576252 | Phase=NormalDay | TotalTPS=45000
+[140s] Sent=225072 | Skipped=0 | Served=224559 | Rejected=383 | Lost=0 | Violations=198 | PredictedProfit=2453630 | RealizedProfit=2591700 | Phase=NormalDay | TotalTPS=45000
+[145s] Sent=225000 | Skipped=0 | Served=224338 | Rejected=405 | Lost=0 | Violations=288 | PredictedProfit=2451132 | RealizedProfit=2587484 | Phase=NormalDay | TotalTPS=45000
+[150s] Sent=225000 | Skipped=0 | Served=224568 | Rejected=248 | Lost=0 | Violations=184 | PredictedProfit=2442640 | RealizedProfit=2575814 | Phase=NormalDay | TotalTPS=45000
+[155s] Sent=225000 | Skipped=0 | Served=224019 | Rejected=758 | Lost=0 | Violations=223 | PredictedProfit=2435308 | RealizedProfit=2568897 | Phase=NormalDay | TotalTPS=45000
+[160s] Sent=225000 | Skipped=0 | Served=224297 | Rejected=496 | Lost=0 | Violations=207 | PredictedProfit=2434191 | RealizedProfit=2572139 | Phase=NormalDay | TotalTPS=45000
+[165s] Sent=225000 | Skipped=0 | Served=224907 | Rejected=33 | Lost=0 | Violations=60 | PredictedProfit=2455296 | RealizedProfit=2594561 | Phase=NormalDay | TotalTPS=45000
+[170s] Sent=225018 | Skipped=0 | Served=224479 | Rejected=378 | Lost=0 | Violations=143 | PredictedProfit=2437279 | RealizedProfit=2571757 | Phase=NormalDay | TotalTPS=45000
+[175s] Sent=225068 | Skipped=0 | Served=224085 | Rejected=708 | Lost=0 | Violations=226 | PredictedProfit=2447416 | RealizedProfit=2585712 | Phase=NormalDay | TotalTPS=45000
+[180s] Sent=225163 | Skipped=0 | Served=224314 | Rejected=584 | Lost=0 | Violations=239 | PredictedProfit=2442592 | RealizedProfit=2579077 | Phase=NormalDay | TotalTPS=45000
+[185s] Sent=225080 | Skipped=0 | Served=224719 | Rejected=139 | Lost=0 | Violations=232 | PredictedProfit=2462845 | RealizedProfit=2601089 | Phase=NormalDay | TotalTPS=45000
+[190s] Sent=225119 | Skipped=0 | Served=224435 | Rejected=479 | Lost=0 | Violations=181 | PredictedProfit=2446027 | RealizedProfit=2580277 | Phase=NormalDay | TotalTPS=45000
+[195s] Sent=225106 | Skipped=0 | Served=224413 | Rejected=465 | Lost=0 | Violations=244 | PredictedProfit=2445540 | RealizedProfit=2583611 | Phase=NormalDay | TotalTPS=45000
+[200s] Sent=225046 | Skipped=0 | Served=224580 | Rejected=253 | Lost=0 | Violations=242 | PredictedProfit=2448865 | RealizedProfit=2586562 | Phase=NormalDay | TotalTPS=45000
+[205s] Sent=225000 | Skipped=0 | Served=224419 | Rejected=388 | Lost=0 | Violations=210 | PredictedProfit=2443896 | RealizedProfit=2580861 | Phase=NormalDay | TotalTPS=45000
+[210s] Sent=225000 | Skipped=0 | Served=224539 | Rejected=336 | Lost=0 | Violations=170 | PredictedProfit=2465597 | RealizedProfit=2602660 | Phase=NormalDay | TotalTPS=45000
+[215s] Sent=225000 | Skipped=0 | Served=224525 | Rejected=230 | Lost=0 | Violations=245 | PredictedProfit=2453664 | RealizedProfit=2590102 | Phase=NormalDay | TotalTPS=45000
+[220s] Sent=225030 | Skipped=0 | Served=224486 | Rejected=300 | Lost=0 | Violations=214 | PredictedProfit=2444926 | RealizedProfit=2578419 | Phase=NormalDay | TotalTPS=45000
+[225s] Sent=225154 | Skipped=0 | Served=224726 | Rejected=264 | Lost=0 | Violations=118 | PredictedProfit=2464756 | RealizedProfit=2598459 | Phase=NormalDay | TotalTPS=45000
+[230s] Sent=225116 | Skipped=0 | Served=224306 | Rejected=603 | Lost=0 | Violations=195 | PredictedProfit=2437529 | RealizedProfit=2572841 | Phase=NormalDay | TotalTPS=45000
+[235s] Sent=225000 | Skipped=0 | Served=224401 | Rejected=443 | Lost=0 | Violations=213 | PredictedProfit=2441747 | RealizedProfit=2578494 | Phase=NormalDay | TotalTPS=45000
+[240s] Sent=225000 | Skipped=0 | Served=223530 | Rejected=1300 | Lost=0 | Violations=201 | PredictedProfit=2423070 | RealizedProfit=2557924 | Phase=NormalDay | TotalTPS=45000
+[245s] Sent=225000 | Skipped=0 | Served=224642 | Rejected=183 | Lost=0 | Violations=175 | PredictedProfit=2444673 | RealizedProfit=2583519 | Phase=NormalDay | TotalTPS=45000
+[250s] Sent=225000 | Skipped=0 | Served=224632 | Rejected=249 | Lost=0 | Violations=119 | PredictedProfit=2453695 | RealizedProfit=2591311 | Phase=NormalDay | TotalTPS=45000
+[255s] Sent=225000 | Skipped=0 | Served=224806 | Rejected=111 | Lost=0 | Violations=83 | PredictedProfit=2448857 | RealizedProfit=2584289 | Phase=NormalDay | TotalTPS=45000
+[260s] Sent=225000 | Skipped=0 | Served=224327 | Rejected=471 | Lost=0 | Violations=202 | PredictedProfit=2438089 | RealizedProfit=2574810 | Phase=NormalDay | TotalTPS=45000
+[265s] Sent=225094 | Skipped=0 | Served=224282 | Rejected=576 | Lost=0 | Violations=169 | PredictedProfit=2449535 | RealizedProfit=2585573 | Phase=NormalDay | TotalTPS=45000
+[270s] Sent=225104 | Skipped=0 | Served=224529 | Rejected=392 | Lost=0 | Violations=148 | PredictedProfit=2425155 | RealizedProfit=2562386 | Phase=NormalDay | TotalTPS=45000
+[275s] Sent=225099 | Skipped=0 | Served=224816 | Rejected=160 | Lost=0 | Violations=113 | PredictedProfit=2454959 | RealizedProfit=2591108 | Phase=NormalDay | TotalTPS=45000
+[280s] Sent=225106 | Skipped=0 | Served=224888 | Rejected=137 | Lost=0 | Violations=88 | PredictedProfit=2446005 | RealizedProfit=2581990 | Phase=NormalDay | TotalTPS=45000
+[285s] Sent=225187 | Skipped=0 | Served=224877 | Rejected=109 | Lost=0 | Violations=150 | PredictedProfit=2449345 | RealizedProfit=2585281 | Phase=NormalDay | TotalTPS=45000
+[290s] Sent=225174 | Skipped=0 | Served=224871 | Rejected=135 | Lost=0 | Violations=102 | PredictedProfit=2466458 | RealizedProfit=2599117 | Phase=NormalDay | TotalTPS=45000
+[295s] Sent=225074 | Skipped=0 | Served=224599 | Rejected=386 | Lost=0 | Violations=151 | PredictedProfit=2462750 | RealizedProfit=2599544 | Phase=NormalDay | TotalTPS=45000
+[300s] Sent=225212 | Skipped=0 | Served=224410 | Rejected=528 | Lost=0 | Violations=233 | PredictedProfit=2433540 | RealizedProfit=2569883 | Phase=NormalDay | TotalTPS=45000
+[305s] Sent=225193 | Skipped=0 | Served=224417 | Rejected=525 | Lost=0 | Violations=225 | PredictedProfit=2430530 | RealizedProfit=2567332 | Phase=NormalDay | TotalTPS=45000
+[310s] Sent=225977 | Skipped=0 | Served=224848 | Rejected=663 | Lost=0 | Violations=176 | PredictedProfit=2458111 | RealizedProfit=2593878 | Phase=NormalDay | TotalTPS=45000
+[315s] Sent=225308 | Skipped=0 | Served=224724 | Rejected=266 | Lost=0 | Violations=115 | PredictedProfit=2444609 | RealizedProfit=2582903 | Phase=NormalDay | TotalTPS=45000
+[320s] Sent=225213 | Skipped=0 | Served=224088 | Rejected=1169 | Lost=0 | Violations=236 | PredictedProfit=2439136 | RealizedProfit=2579108 | Phase=NormalDay | TotalTPS=45000
+[325s] Sent=225244 | Skipped=0 | Served=224344 | Rejected=865 | Lost=0 | Violations=99 | PredictedProfit=2440839 | RealizedProfit=2581250 | Phase=NormalDay | TotalTPS=45000
+[330s] Sent=224970 | Skipped=0 | Served=224189 | Rejected=518 | Lost=0 | Violations=196 | PredictedProfit=2441677 | RealizedProfit=2579860 | Phase=NormalDay | TotalTPS=45000
+
+========================================
+Starting Phase 3/10: HolidayPlateau
+   Duration: 300s | Total TPS: 72000 | Read share: 87%
+   Mix 'holiday': app1/read/sla1=38.0%, app1/read/sla2=6.0%, app1/write/sla1=5.0%, app2/read/sla1=26.0%, app2/write/sla1=2.0%, app3/read/sla1=12.0%, app3/write/sla1=5.0%, app4/read/sla1=5.0%, app4/write/sla1=1.0%
+========================================
+[335s] Sent=334835 | Skipped=0 | Served=327017 | Rejected=7221 | Lost=0 | Violations=384 | PredictedProfit=3819354 | RealizedProfit=4066615 | Phase=HolidayPlateau | TotalTPS=72000
+[340s] Sent=360158 | Skipped=0 | Served=351095 | Rejected=8905 | Lost=0 | Violations=348 | PredictedProfit=4103312 | RealizedProfit=4397987 | Phase=HolidayPlateau | TotalTPS=72000
+[345s] Sent=360032 | Skipped=0 | Served=353004 | Rejected=7106 | Lost=0 | Violations=194 | PredictedProfit=4128079 | RealizedProfit=4437623 | Phase=HolidayPlateau | TotalTPS=72000
+[350s] Sent=360000 | Skipped=0 | Served=353758 | Rejected=6194 | Lost=0 | Violations=242 | PredictedProfit=4141263 | RealizedProfit=4443998 | Phase=HolidayPlateau | TotalTPS=72000
+[355s] Sent=360066 | Skipped=0 | Served=352175 | Rejected=7572 | Lost=0 | Violations=271 | PredictedProfit=4109442 | RealizedProfit=4417795 | Phase=HolidayPlateau | TotalTPS=72000
+[360s] Sent=360111 | Skipped=0 | Served=354776 | Rejected=5036 | Lost=0 | Violations=261 | PredictedProfit=4165895 | RealizedProfit=4469368 | Phase=HolidayPlateau | TotalTPS=72000
+[365s] Sent=360146 | Skipped=0 | Served=354156 | Rejected=5587 | Lost=0 | Violations=415 | PredictedProfit=4153869 | RealizedProfit=4452639 | Phase=HolidayPlateau | TotalTPS=72000
+[370s] Sent=360093 | Skipped=0 | Served=353048 | Rejected=6562 | Lost=0 | Violations=425 | PredictedProfit=4134044 | RealizedProfit=4436144 | Phase=HolidayPlateau | TotalTPS=72000
+[375s] Sent=360224 | Skipped=0 | Served=352388 | Rejected=7447 | Lost=0 | Violations=361 | PredictedProfit=4143085 | RealizedProfit=4444487 | Phase=HolidayPlateau | TotalTPS=72000
+[380s] Sent=360173 | Skipped=0 | Served=353881 | Rejected=5987 | Lost=0 | Violations=365 | PredictedProfit=4155832 | RealizedProfit=4459801 | Phase=HolidayPlateau | TotalTPS=72000
+[385s] Sent=360147 | Skipped=0 | Served=353836 | Rejected=5985 | Lost=0 | Violations=365 | PredictedProfit=4146857 | RealizedProfit=4452254 | Phase=HolidayPlateau | TotalTPS=72000
+[390s] Sent=360000 | Skipped=0 | Served=351901 | Rejected=7836 | Lost=0 | Violations=301 | PredictedProfit=4129848 | RealizedProfit=4433437 | Phase=HolidayPlateau | TotalTPS=72000
+[395s] Sent=360000 | Skipped=0 | Served=353440 | Rejected=6257 | Lost=0 | Violations=323 | PredictedProfit=4151036 | RealizedProfit=4454302 | Phase=HolidayPlateau | TotalTPS=72000
+[400s] Sent=360000 | Skipped=0 | Served=354820 | Rejected=4951 | Lost=0 | Violations=232 | PredictedProfit=4171845 | RealizedProfit=4479888 | Phase=HolidayPlateau | TotalTPS=72000
+[405s] Sent=360000 | Skipped=0 | Served=353358 | Rejected=6322 | Lost=0 | Violations=320 | PredictedProfit=4129251 | RealizedProfit=4430678 | Phase=HolidayPlateau | TotalTPS=72000
+[410s] Sent=360000 | Skipped=0 | Served=355251 | Rejected=4519 | Lost=0 | Violations=230 | PredictedProfit=4188010 | RealizedProfit=4486250 | Phase=HolidayPlateau | TotalTPS=72000
+[415s] Sent=360112 | Skipped=0 | Served=355198 | Rejected=4558 | Lost=0 | Violations=290 | PredictedProfit=4201646 | RealizedProfit=4500056 | Phase=HolidayPlateau | TotalTPS=72000
+[420s] Sent=360090 | Skipped=0 | Served=354027 | Rejected=5712 | Lost=0 | Violations=298 | PredictedProfit=4160663 | RealizedProfit=4450691 | Phase=HolidayPlateau | TotalTPS=72000
+[425s] Sent=360102 | Skipped=0 | Served=355172 | Rejected=4571 | Lost=0 | Violations=319 | PredictedProfit=4180761 | RealizedProfit=4475736 | Phase=HolidayPlateau | TotalTPS=72000
+[430s] Sent=360175 | Skipped=0 | Served=353813 | Rejected=6068 | Lost=0 | Violations=254 | PredictedProfit=4183876 | RealizedProfit=4480213 | Phase=HolidayPlateau | TotalTPS=72000
+[435s] Sent=360342 | Skipped=0 | Served=353100 | Rejected=6888 | Lost=0 | Violations=442 | PredictedProfit=4145620 | RealizedProfit=4438500 | Phase=HolidayPlateau | TotalTPS=72000
+[440s] Sent=360139 | Skipped=0 | Served=353867 | Rejected=6083 | Lost=0 | Violations=292 | PredictedProfit=4153685 | RealizedProfit=4453306 | Phase=HolidayPlateau | TotalTPS=72000
+[445s] Sent=360054 | Skipped=0 | Served=354439 | Rejected=5286 | Lost=0 | Violations=293 | PredictedProfit=4154154 | RealizedProfit=4454111 | Phase=HolidayPlateau | TotalTPS=72000
+[450s] Sent=360137 | Skipped=0 | Served=353554 | Rejected=6233 | Lost=0 | Violations=284 | PredictedProfit=4166131 | RealizedProfit=4466293 | Phase=HolidayPlateau | TotalTPS=72000
+[455s] Sent=360087 | Skipped=0 | Served=353754 | Rejected=6044 | Lost=0 | Violations=321 | PredictedProfit=4152139 | RealizedProfit=4456331 | Phase=HolidayPlateau | TotalTPS=72000
+[460s] Sent=360137 | Skipped=0 | Served=353316 | Rejected=6471 | Lost=0 | Violations=349 | PredictedProfit=4147795 | RealizedProfit=4440793 | Phase=HolidayPlateau | TotalTPS=72000
+[465s] Sent=360065 | Skipped=0 | Served=356050 | Rejected=3779 | Lost=0 | Violations=270 | PredictedProfit=4191590 | RealizedProfit=4492107 | Phase=HolidayPlateau | TotalTPS=72000
+[470s] Sent=360000 | Skipped=0 | Served=352655 | Rejected=7058 | Lost=0 | Violations=325 | PredictedProfit=4130334 | RealizedProfit=4424499 | Phase=HolidayPlateau | TotalTPS=72000
+[475s] Sent=360000 | Skipped=0 | Served=352220 | Rejected=7230 | Lost=0 | Violations=558 | PredictedProfit=4119557 | RealizedProfit=4418882 | Phase=HolidayPlateau | TotalTPS=72000
+[480s] Sent=360000 | Skipped=0 | Served=353699 | Rejected=5985 | Lost=0 | Violations=316 | PredictedProfit=4135301 | RealizedProfit=4438460 | Phase=HolidayPlateau | TotalTPS=72000
+[485s] Sent=360022 | Skipped=0 | Served=353885 | Rejected=5803 | Lost=0 | Violations=312 | PredictedProfit=4164119 | RealizedProfit=4472742 | Phase=HolidayPlateau | TotalTPS=72000
+[490s] Sent=360117 | Skipped=0 | Served=353391 | Rejected=6363 | Lost=0 | Violations=292 | PredictedProfit=4167114 | RealizedProfit=4463469 | Phase=HolidayPlateau | TotalTPS=72000
+[495s] Sent=360125 | Skipped=0 | Served=354003 | Rejected=5743 | Lost=0 | Violations=374 | PredictedProfit=4160081 | RealizedProfit=4465098 | Phase=HolidayPlateau | TotalTPS=72000
+[500s] Sent=360080 | Skipped=0 | Served=352532 | Rejected=7170 | Lost=0 | Violations=367 | PredictedProfit=4143136 | RealizedProfit=4439065 | Phase=HolidayPlateau | TotalTPS=72000
+[505s] Sent=360269 | Skipped=0 | Served=354749 | Rejected=5166 | Lost=0 | Violations=244 | PredictedProfit=4155984 | RealizedProfit=4456719 | Phase=HolidayPlateau | TotalTPS=72000
+[510s] Sent=360182 | Skipped=0 | Served=353207 | Rejected=6809 | Lost=0 | Violations=186 | PredictedProfit=4125635 | RealizedProfit=4426639 | Phase=HolidayPlateau | TotalTPS=72000
+[515s] Sent=360273 | Skipped=0 | Served=354957 | Rejected=4956 | Lost=0 | Violations=287 | PredictedProfit=4175333 | RealizedProfit=4478433 | Phase=HolidayPlateau | TotalTPS=72000
+[520s] Sent=360296 | Skipped=0 | Served=353674 | Rejected=6162 | Lost=0 | Violations=386 | PredictedProfit=4164299 | RealizedProfit=4462870 | Phase=HolidayPlateau | TotalTPS=72000
+[525s] Sent=360563 | Skipped=0 | Served=355384 | Rejected=4758 | Lost=0 | Violations=344 | PredictedProfit=4177953 | RealizedProfit=4473648 | Phase=HolidayPlateau | TotalTPS=72000
+[530s] Sent=360626 | Skipped=0 | Served=353921 | Rejected=6269 | Lost=0 | Violations=240 | PredictedProfit=4159592 | RealizedProfit=4456861 | Phase=HolidayPlateau | TotalTPS=72000
+[535s] Sent=361079 | Skipped=0 | Served=355571 | Rejected=5136 | Lost=0 | Violations=266 | PredictedProfit=4184487 | RealizedProfit=4483834 | Phase=HolidayPlateau | TotalTPS=72000
+[540s] Sent=360758 | Skipped=0 | Served=354599 | Rejected=5851 | Lost=0 | Violations=306 | PredictedProfit=4168129 | RealizedProfit=4462115 | Phase=HolidayPlateau | TotalTPS=72000
+[545s] Sent=360245 | Skipped=0 | Served=354007 | Rejected=6205 | Lost=0 | Violations=296 | PredictedProfit=4158520 | RealizedProfit=4457000 | Phase=HolidayPlateau | TotalTPS=72000
+[550s] Sent=360155 | Skipped=0 | Served=353644 | Rejected=6208 | Lost=0 | Violations=314 | PredictedProfit=4154747 | RealizedProfit=4453432 | Phase=HolidayPlateau | TotalTPS=72000
+[555s] Sent=360010 | Skipped=0 | Served=354183 | Rejected=5827 | Lost=0 | Violations=248 | PredictedProfit=4167852 | RealizedProfit=4467391 | Phase=HolidayPlateau | TotalTPS=72000
+[560s] Sent=360000 | Skipped=0 | Served=354076 | Rejected=5667 | Lost=0 | Violations=339 | PredictedProfit=4153805 | RealizedProfit=4447160 | Phase=HolidayPlateau | TotalTPS=72000
+[565s] Sent=360088 | Skipped=0 | Served=353087 | Rejected=6685 | Lost=0 | Violations=363 | PredictedProfit=4125879 | RealizedProfit=4426722 | Phase=HolidayPlateau | TotalTPS=72000
+[570s] Sent=360126 | Skipped=0 | Served=354653 | Rejected=5193 | Lost=0 | Violations=231 | PredictedProfit=4153692 | RealizedProfit=4451381 | Phase=HolidayPlateau | TotalTPS=72000
+[575s] Sent=360098 | Skipped=0 | Served=354247 | Rejected=5543 | Lost=0 | Violations=332 | PredictedProfit=4171690 | RealizedProfit=4468212 | Phase=HolidayPlateau | TotalTPS=72000
+[580s] Sent=360145 | Skipped=0 | Served=355126 | Rejected=4768 | Lost=0 | Violations=227 | PredictedProfit=4195380 | RealizedProfit=4491472 | Phase=HolidayPlateau | TotalTPS=72000
+[585s] Sent=360212 | Skipped=0 | Served=354527 | Rejected=5362 | Lost=0 | Violations=321 | PredictedProfit=4181323 | RealizedProfit=4475170 | Phase=HolidayPlateau | TotalTPS=72000
+[590s] Sent=360125 | Skipped=0 | Served=354640 | Rejected=5201 | Lost=0 | Violations=306 | PredictedProfit=4183488 | RealizedProfit=4474757 | Phase=HolidayPlateau | TotalTPS=72000
+[595s] Sent=360108 | Skipped=0 | Served=354825 | Rejected=4961 | Lost=0 | Violations=355 | PredictedProfit=4188209 | RealizedProfit=4481319 | Phase=HolidayPlateau | TotalTPS=72000
+[600s] Sent=360058 | Skipped=0 | Served=354817 | Rejected=5032 | Lost=0 | Violations=248 | PredictedProfit=4184018 | RealizedProfit=4475560 | Phase=HolidayPlateau | TotalTPS=72000
+[605s] Sent=360000 | Skipped=0 | Served=354730 | Rejected=5017 | Lost=0 | Violations=285 | PredictedProfit=4198146 | RealizedProfit=4483803 | Phase=HolidayPlateau | TotalTPS=72000
+[610s] Sent=360000 | Skipped=0 | Served=354441 | Rejected=5321 | Lost=0 | Violations=239 | PredictedProfit=4177215 | RealizedProfit=4471126 | Phase=HolidayPlateau | TotalTPS=72000
+[615s] Sent=360000 | Skipped=0 | Served=353896 | Rejected=5787 | Lost=0 | Violations=317 | PredictedProfit=4182696 | RealizedProfit=4471429 | Phase=HolidayPlateau | TotalTPS=72000
+[620s] Sent=360000 | Skipped=0 | Served=353622 | Rejected=6158 | Lost=0 | Violations=220 | PredictedProfit=4158345 | RealizedProfit=4454847 | Phase=HolidayPlateau | TotalTPS=72000
+[625s] Sent=360085 | Skipped=0 | Served=355941 | Rejected=3757 | Lost=0 | Violations=314 | PredictedProfit=4206581 | RealizedProfit=4504622 | Phase=HolidayPlateau | TotalTPS=72000
+[630s] Sent=360107 | Skipped=0 | Served=351788 | Rejected=7722 | Lost=0 | Violations=534 | PredictedProfit=4124937 | RealizedProfit=4419612 | Phase=HolidayPlateau | TotalTPS=72000
+
+========================================
+Starting Phase 4/10: SaleDay
+   Duration: 300s | Total TPS: 162000 | Read share: 77%
+   Mix 'saleDay': app1/read/sla1=26.0%, app1/read/sla2=14.0%, app1/write/sla1=12.0%, app2/read/sla1=16.0%, app2/write/sla1=2.0%, app3/read/sla1=12.0%, app3/write/sla1=6.0%, app4/read/sla1=9.0%, app4/write/sla1=3.0%
+========================================
+[635s] Sent=683341 | Skipped=0 | Served=562517 | Rejected=116562 | Lost=0 | Violations=2091 | PredictedProfit=9166389 | RealizedProfit=10296312 | Phase=SaleDay | TotalTPS=162000
+[640s] Sent=810461 | Skipped=0 | Served=656682 | Rejected=152941 | Lost=0 | Violations=2486 | PredictedProfit=10983358 | RealizedProfit=12783099 | Phase=SaleDay | TotalTPS=162000
+[645s] Sent=811235 | Skipped=0 | Served=672379 | Rejected=136589 | Lost=0 | Violations=2217 | PredictedProfit=11224553 | RealizedProfit=13094019 | Phase=SaleDay | TotalTPS=162000
+[650s] Sent=810522 | Skipped=0 | Served=678203 | Rejected=129861 | Lost=0 | Violations=1871 | PredictedProfit=11384113 | RealizedProfit=13267151 | Phase=SaleDay | TotalTPS=162000
+[655s] Sent=810483 | Skipped=0 | Served=679109 | Rejected=130080 | Lost=0 | Violations=1979 | PredictedProfit=11427969 | RealizedProfit=13273835 | Phase=SaleDay | TotalTPS=162000
+[660s] Sent=810395 | Skipped=0 | Served=679811 | Rejected=128696 | Lost=0 | Violations=1944 | PredictedProfit=11420666 | RealizedProfit=13296164 | Phase=SaleDay | TotalTPS=162000
+[665s] Sent=811562 | Skipped=0 | Served=680255 | Rejected=129305 | Lost=0 | Violations=1999 | PredictedProfit=11417541 | RealizedProfit=13329219 | Phase=SaleDay | TotalTPS=162000
+[670s] Sent=810349 | Skipped=0 | Served=680637 | Rejected=127674 | Lost=0 | Violations=1990 | PredictedProfit=11446465 | RealizedProfit=13335388 | Phase=SaleDay | TotalTPS=162000
+[675s] Sent=812405 | Skipped=0 | Served=679335 | Rejected=130522 | Lost=0 | Violations=2122 | PredictedProfit=11397184 | RealizedProfit=13300966 | Phase=SaleDay | TotalTPS=162000
+[680s] Sent=811654 | Skipped=0 | Served=672979 | Rejected=136496 | Lost=0 | Violations=2189 | PredictedProfit=11226811 | RealizedProfit=13108532 | Phase=SaleDay | TotalTPS=162000
+[685s] Sent=811632 | Skipped=0 | Served=680419 | Rejected=129201 | Lost=0 | Violations=1966 | PredictedProfit=11440760 | RealizedProfit=13352096 | Phase=SaleDay | TotalTPS=162000
+[690s] Sent=811426 | Skipped=0 | Served=675413 | Rejected=133165 | Lost=0 | Violations=2217 | PredictedProfit=11285027 | RealizedProfit=13146917 | Phase=SaleDay | TotalTPS=162000
+[695s] Sent=810950 | Skipped=0 | Served=679432 | Rejected=130763 | Lost=0 | Violations=1859 | PredictedProfit=11396368 | RealizedProfit=13292483 | Phase=SaleDay | TotalTPS=162000
+[700s] Sent=811592 | Skipped=0 | Served=675059 | Rejected=134622 | Lost=0 | Violations=2064 | PredictedProfit=11309577 | RealizedProfit=13165605 | Phase=SaleDay | TotalTPS=162000
+[705s] Sent=812023 | Skipped=0 | Served=676150 | Rejected=132728 | Lost=0 | Violations=2014 | PredictedProfit=11277822 | RealizedProfit=13151049 | Phase=SaleDay | TotalTPS=162000
+[710s] Sent=810568 | Skipped=0 | Served=680069 | Rejected=130194 | Lost=0 | Violations=1716 | PredictedProfit=11348788 | RealizedProfit=13243630 | Phase=SaleDay | TotalTPS=162000
+[715s] Sent=810582 | Skipped=0 | Served=676736 | Rejected=132045 | Lost=0 | Violations=1963 | PredictedProfit=11321636 | RealizedProfit=13168428 | Phase=SaleDay | TotalTPS=162000
+[720s] Sent=810185 | Skipped=0 | Served=676002 | Rejected=132393 | Lost=0 | Violations=1818 | PredictedProfit=11314938 | RealizedProfit=13177420 | Phase=SaleDay | TotalTPS=162000
+[725s] Sent=810870 | Skipped=0 | Served=678823 | Rejected=130186 | Lost=0 | Violations=1839 | PredictedProfit=11367570 | RealizedProfit=13259844 | Phase=SaleDay | TotalTPS=162000
+[730s] Sent=810486 | Skipped=0 | Served=677759 | Rejected=130504 | Lost=0 | Violations=1817 | PredictedProfit=11316290 | RealizedProfit=13202532 | Phase=SaleDay | TotalTPS=162000
+[735s] Sent=811675 | Skipped=0 | Served=680718 | Rejected=129534 | Lost=0 | Violations=1668 | PredictedProfit=11419030 | RealizedProfit=13345202 | Phase=SaleDay | TotalTPS=162000
+[740s] Sent=811452 | Skipped=0 | Served=683186 | Rejected=126516 | Lost=0 | Violations=1865 | PredictedProfit=11447698 | RealizedProfit=13381633 | Phase=SaleDay | TotalTPS=162000
+[745s] Sent=811706 | Skipped=0 | Served=675328 | Rejected=133815 | Lost=0 | Violations=2053 | PredictedProfit=11321290 | RealizedProfit=13220044 | Phase=SaleDay | TotalTPS=162000
+[750s] Sent=811876 | Skipped=0 | Served=676697 | Rejected=133017 | Lost=0 | Violations=2426 | PredictedProfit=11327151 | RealizedProfit=13215034 | Phase=SaleDay | TotalTPS=162000
+[755s] Sent=810307 | Skipped=0 | Served=677245 | Rejected=130772 | Lost=0 | Violations=2157 | PredictedProfit=11361655 | RealizedProfit=13249084 | Phase=SaleDay | TotalTPS=162000
+[760s] Sent=811432 | Skipped=0 | Served=678490 | Rejected=131598 | Lost=0 | Violations=1691 | PredictedProfit=11371968 | RealizedProfit=13267464 | Phase=SaleDay | TotalTPS=162000
+[765s] Sent=812746 | Skipped=0 | Served=675830 | Rejected=135152 | Lost=0 | Violations=1878 | PredictedProfit=11273212 | RealizedProfit=13117759 | Phase=SaleDay | TotalTPS=162000
+[770s] Sent=812066 | Skipped=0 | Served=675377 | Rejected=134763 | Lost=0 | Violations=1845 | PredictedProfit=11297583 | RealizedProfit=13143316 | Phase=SaleDay | TotalTPS=162000
+[775s] Sent=811547 | Skipped=0 | Served=678895 | Rejected=130752 | Lost=0 | Violations=1967 | PredictedProfit=11404526 | RealizedProfit=13273704 | Phase=SaleDay | TotalTPS=162000
+[780s] Sent=810392 | Skipped=0 | Served=676785 | Rejected=130356 | Lost=0 | Violations=2052 | PredictedProfit=11287095 | RealizedProfit=13136401 | Phase=SaleDay | TotalTPS=162000
+[785s] Sent=810744 | Skipped=0 | Served=680897 | Rejected=129283 | Lost=0 | Violations=2140 | PredictedProfit=11416438 | RealizedProfit=13303946 | Phase=SaleDay | TotalTPS=162000
+[790s] Sent=810930 | Skipped=0 | Served=680524 | Rejected=128310 | Lost=0 | Violations=1802 | PredictedProfit=11415082 | RealizedProfit=13327942 | Phase=SaleDay | TotalTPS=162000
+[795s] Sent=809848 | Skipped=0 | Served=676741 | Rejected=131004 | Lost=0 | Violations=1994 | PredictedProfit=11373072 | RealizedProfit=13248183 | Phase=SaleDay | TotalTPS=162000
+[800s] Sent=811746 | Skipped=0 | Served=678170 | Rejected=131593 | Lost=0 | Violations=1894 | PredictedProfit=11359363 | RealizedProfit=13259884 | Phase=SaleDay | TotalTPS=162000
+[805s] Sent=812149 | Skipped=0 | Served=680469 | Rejected=129772 | Lost=0 | Violations=1878 | PredictedProfit=11381265 | RealizedProfit=13314882 | Phase=SaleDay | TotalTPS=162000
+[810s] Sent=811093 | Skipped=0 | Served=676097 | Rejected=132896 | Lost=0 | Violations=2061 | PredictedProfit=11337367 | RealizedProfit=13247598 | Phase=SaleDay | TotalTPS=162000
+[815s] Sent=811577 | Skipped=0 | Served=677607 | Rejected=131714 | Lost=0 | Violations=2227 | PredictedProfit=11324706 | RealizedProfit=13231560 | Phase=SaleDay | TotalTPS=162000
+[820s] Sent=812257 | Skipped=0 | Served=680214 | Rejected=130123 | Lost=0 | Violations=2043 | PredictedProfit=11397683 | RealizedProfit=13317293 | Phase=SaleDay | TotalTPS=162000
+[825s] Sent=812793 | Skipped=0 | Served=677624 | Rejected=132606 | Lost=0 | Violations=1856 | PredictedProfit=11308434 | RealizedProfit=13208032 | Phase=SaleDay | TotalTPS=162000
+[830s] Sent=810113 | Skipped=0 | Served=680714 | Rejected=128038 | Lost=0 | Violations=1954 | PredictedProfit=11434305 | RealizedProfit=13335262 | Phase=SaleDay | TotalTPS=162000
+[835s] Sent=811978 | Skipped=0 | Served=679813 | Rejected=130199 | Lost=0 | Violations=2212 | PredictedProfit=11387306 | RealizedProfit=13287488 | Phase=SaleDay | TotalTPS=162000
+[840s] Sent=811138 | Skipped=0 | Served=677364 | Rejected=132278 | Lost=0 | Violations=1983 | PredictedProfit=11338774 | RealizedProfit=13218647 | Phase=SaleDay | TotalTPS=162000
+[845s] Sent=810284 | Skipped=0 | Served=673315 | Rejected=134246 | Lost=0 | Violations=2422 | PredictedProfit=11259544 | RealizedProfit=13101740 | Phase=SaleDay | TotalTPS=162000
+[850s] Sent=810231 | Skipped=0 | Served=676505 | Rejected=131619 | Lost=0 | Violations=2068 | PredictedProfit=11361008 | RealizedProfit=13226714 | Phase=SaleDay | TotalTPS=162000
+[855s] Sent=810730 | Skipped=0 | Served=680289 | Rejected=128833 | Lost=0 | Violations=1675 | PredictedProfit=11434856 | RealizedProfit=13314070 | Phase=SaleDay | TotalTPS=162000
+[860s] Sent=811368 | Skipped=0 | Served=679052 | Rejected=130403 | Lost=0 | Violations=2013 | PredictedProfit=11427886 | RealizedProfit=13306922 | Phase=SaleDay | TotalTPS=162000
+[865s] Sent=812397 | Skipped=0 | Served=677110 | Rejected=132328 | Lost=0 | Violations=2454 | PredictedProfit=11327220 | RealizedProfit=13199055 | Phase=SaleDay | TotalTPS=162000
+[870s] Sent=810694 | Skipped=0 | Served=675676 | Rejected=133500 | Lost=0 | Violations=1814 | PredictedProfit=11351970 | RealizedProfit=13227140 | Phase=SaleDay | TotalTPS=162000
+[875s] Sent=811623 | Skipped=0 | Served=678982 | Rejected=129795 | Lost=0 | Violations=2144 | PredictedProfit=11374632 | RealizedProfit=13258367 | Phase=SaleDay | TotalTPS=162000
+[880s] Sent=810821 | Skipped=0 | Served=679059 | Rejected=129820 | Lost=0 | Violations=2659 | PredictedProfit=11390374 | RealizedProfit=13288951 | Phase=SaleDay | TotalTPS=162000
+[885s] Sent=812974 | Skipped=0 | Served=675418 | Rejected=134320 | Lost=0 | Violations=2114 | PredictedProfit=11284058 | RealizedProfit=13157134 | Phase=SaleDay | TotalTPS=162000
+[890s] Sent=811365 | Skipped=0 | Served=669973 | Rejected=140364 | Lost=0 | Violations=2298 | PredictedProfit=11161793 | RealizedProfit=12968930 | Phase=SaleDay | TotalTPS=162000
+[895s] Sent=810203 | Skipped=0 | Served=680490 | Rejected=128434 | Lost=0 | Violations=1648 | PredictedProfit=11446304 | RealizedProfit=13304555 | Phase=SaleDay | TotalTPS=162000
+[900s] Sent=811704 | Skipped=0 | Served=682801 | Rejected=126990 | Lost=0 | Violations=1637 | PredictedProfit=11517730 | RealizedProfit=13391179 | Phase=SaleDay | TotalTPS=162000
+[905s] Sent=811078 | Skipped=0 | Served=681481 | Rejected=127824 | Lost=0 | Violations=2175 | PredictedProfit=11445744 | RealizedProfit=13332338 | Phase=SaleDay | TotalTPS=162000
+[910s] Sent=810318 | Skipped=0 | Served=678636 | Rejected=129514 | Lost=0 | Violations=2030 | PredictedProfit=11371571 | RealizedProfit=13256903 | Phase=SaleDay | TotalTPS=162000
+[915s] Sent=810640 | Skipped=0 | Served=680273 | Rejected=128808 | Lost=0 | Violations=1751 | PredictedProfit=11433851 | RealizedProfit=13318373 | Phase=SaleDay | TotalTPS=162000
+[920s] Sent=811338 | Skipped=0 | Served=679381 | Rejected=130212 | Lost=0 | Violations=1665 | PredictedProfit=11424979 | RealizedProfit=13312757 | Phase=SaleDay | TotalTPS=162000
+[925s] Sent=811116 | Skipped=0 | Served=678510 | Rejected=130219 | Lost=0 | Violations=2017 | PredictedProfit=11400754 | RealizedProfit=13269883 | Phase=SaleDay | TotalTPS=162000
+[930s] Sent=811807 | Skipped=0 | Served=675403 | Rejected=134338 | Lost=0 | Violations=2054 | PredictedProfit=11308827 | RealizedProfit=13157689 | Phase=SaleDay | TotalTPS=162000
+
+========================================
+Starting Phase 5/10: PreFlash
+   Duration: 120s | Total TPS: 90000 | Read share: 75%
+   Mix 'preFlash': app1/read/sla1=18.0%, app1/read/sla2=3.0%, app1/write/sla1=2.0%, app2/read/sla1=8.0%, app2/write/sla1=1.0%, app3/read/sla1=40.0%, app3/write/sla1=20.0%, app4/read/sla1=6.0%, app4/write/sla1=2.0%
+========================================
+[935s] Sent=561193 | Skipped=0 | Served=450461 | Rejected=109017 | Lost=0 | Violations=1110 | PredictedProfit=6446532 | RealizedProfit=7540528 | Phase=PreFlash | TotalTPS=90000
+[940s] Sent=451786 | Skipped=0 | Served=381098 | Rejected=70883 | Lost=0 | Violations=731 | PredictedProfit=4639379 | RealizedProfit=5329911 | Phase=PreFlash | TotalTPS=90000
+[945s] Sent=450147 | Skipped=0 | Served=376506 | Rejected=72746 | Lost=0 | Violations=977 | PredictedProfit=4629570 | RealizedProfit=5251444 | Phase=PreFlash | TotalTPS=90000
+[950s] Sent=450501 | Skipped=0 | Served=375717 | Rejected=73126 | Lost=0 | Violations=877 | PredictedProfit=4680204 | RealizedProfit=5269808 | Phase=PreFlash | TotalTPS=90000
+[955s] Sent=450205 | Skipped=0 | Served=377444 | Rejected=72799 | Lost=0 | Violations=803 | PredictedProfit=4748856 | RealizedProfit=5312290 | Phase=PreFlash | TotalTPS=90000
+[960s] Sent=450145 | Skipped=0 | Served=376978 | Rejected=72104 | Lost=0 | Violations=1007 | PredictedProfit=4741077 | RealizedProfit=5280364 | Phase=PreFlash | TotalTPS=90000
+[965s] Sent=450014 | Skipped=0 | Served=377707 | Rejected=71602 | Lost=0 | Violations=951 | PredictedProfit=4755132 | RealizedProfit=5288436 | Phase=PreFlash | TotalTPS=90000
+[970s] Sent=450000 | Skipped=0 | Served=375315 | Rejected=74010 | Lost=0 | Violations=913 | PredictedProfit=4725365 | RealizedProfit=5242572 | Phase=PreFlash | TotalTPS=90000
+[975s] Sent=450000 | Skipped=0 | Served=379109 | Rejected=70134 | Lost=0 | Violations=853 | PredictedProfit=4798589 | RealizedProfit=5328836 | Phase=PreFlash | TotalTPS=90000
+[980s] Sent=450065 | Skipped=0 | Served=379048 | Rejected=70151 | Lost=0 | Violations=811 | PredictedProfit=4802749 | RealizedProfit=5325857 | Phase=PreFlash | TotalTPS=90000
+[985s] Sent=450131 | Skipped=0 | Served=374453 | Rejected=74696 | Lost=0 | Violations=902 | PredictedProfit=4720118 | RealizedProfit=5234185 | Phase=PreFlash | TotalTPS=90000
+[990s] Sent=450125 | Skipped=0 | Served=377448 | Rejected=71805 | Lost=0 | Violations=847 | PredictedProfit=4751215 | RealizedProfit=5272308 | Phase=PreFlash | TotalTPS=90000
+[995s] Sent=450156 | Skipped=0 | Served=376157 | Rejected=73087 | Lost=0 | Violations=841 | PredictedProfit=4733979 | RealizedProfit=5250816 | Phase=PreFlash | TotalTPS=90000
+[1000s] Sent=450350 | Skipped=0 | Served=371464 | Rejected=77834 | Lost=0 | Violations=916 | PredictedProfit=4667414 | RealizedProfit=5170802 | Phase=PreFlash | TotalTPS=90000
+[1005s] Sent=450073 | Skipped=0 | Served=378839 | Rejected=70233 | Lost=0 | Violations=959 | PredictedProfit=4730760 | RealizedProfit=5253872 | Phase=PreFlash | TotalTPS=90000
+[1010s] Sent=450138 | Skipped=0 | Served=378177 | Rejected=70902 | Lost=0 | Violations=992 | PredictedProfit=4748841 | RealizedProfit=5273375 | Phase=PreFlash | TotalTPS=90000
+[1015s] Sent=450152 | Skipped=0 | Served=375314 | Rejected=74016 | Lost=0 | Violations=893 | PredictedProfit=4741717 | RealizedProfit=5262052 | Phase=PreFlash | TotalTPS=90000
+[1020s] Sent=450010 | Skipped=0 | Served=379394 | Rejected=69714 | Lost=0 | Violations=938 | PredictedProfit=4777693 | RealizedProfit=5293735 | Phase=PreFlash | TotalTPS=90000
+[1025s] Sent=450100 | Skipped=0 | Served=376010 | Rejected=73452 | Lost=0 | Violations=866 | PredictedProfit=4750960 | RealizedProfit=5269633 | Phase=PreFlash | TotalTPS=90000
+[1030s] Sent=450138 | Skipped=0 | Served=377746 | Rejected=71334 | Lost=0 | Violations=931 | PredictedProfit=4752306 | RealizedProfit=5267062 | Phase=PreFlash | TotalTPS=90000
+[1035s] Sent=450112 | Skipped=0 | Served=375012 | Rejected=74159 | Lost=0 | Violations=886 | PredictedProfit=4714426 | RealizedProfit=5221147 | Phase=PreFlash | TotalTPS=90000
+[1040s] Sent=450072 | Skipped=0 | Served=377124 | Rejected=72241 | Lost=0 | Violations=892 | PredictedProfit=4761122 | RealizedProfit=5273783 | Phase=PreFlash | TotalTPS=90000
+[1045s] Sent=450073 | Skipped=0 | Served=376439 | Rejected=72544 | Lost=0 | Violations=1074 | PredictedProfit=4733353 | RealizedProfit=5240294 | Phase=PreFlash | TotalTPS=90000
+[1050s] Sent=450105 | Skipped=0 | Served=381763 | Rejected=67212 | Lost=0 | Violations=1087 | PredictedProfit=4815675 | RealizedProfit=5320751 | Phase=PreFlash | TotalTPS=90000
+
+========================================
+Starting Phase 6/10: Flash
+   Duration: 60s | Total TPS: 225000 | Read share: 73%
+   Mix 'flash': app1/read/sla1=5.0%, app1/read/sla3=45.0%, app1/write/sla1=20.0%, app2/read/sla1=2.0%, app2/write/sla1=1.0%, app3/read/sla1=18.0%, app3/write/sla1=5.0%, app4/read/sla1=3.0%, app4/write/sla1=1.0%
+========================================
+[1055s] Sent=801251 | Skipped=51000 | Served=514927 | Rejected=45111 | Lost=0 | Violations=59698 | PredictedProfit=12057313 | RealizedProfit=12538659 | Phase=Flash | TotalTPS=225000
+[1060s] Sent=1097570 | Skipped=28500 | Served=804428 | Rejected=0 | Lost=0 | Violations=118013 | PredictedProfit=19409088 | RealizedProfit=24314338 | Phase=Flash | TotalTPS=225000
+[1065s] Sent=1128154 | Skipped=0 | Served=888045 | Rejected=5649 | Lost=0 | Violations=85250 | PredictedProfit=21562419 | RealizedProfit=26008612 | Phase=Flash | TotalTPS=225000
+[1071s] Sent=1135737 | Skipped=0 | Served=926193 | Rejected=20266 | Lost=0 | Violations=81012 | PredictedProfit=21645937 | RealizedProfit=25793495 | Phase=Flash | TotalTPS=225000
+[1076s] Sent=1126170 | Skipped=0 | Served=901030 | Rejected=10428 | Lost=0 | Violations=72042 | PredictedProfit=21806758 | RealizedProfit=26011344 | Phase=Flash | TotalTPS=225000
+[1081s] Sent=1133286 | Skipped=0 | Served=924347 | Rejected=20934 | Lost=0 | Violations=76386 | PredictedProfit=21358680 | RealizedProfit=25443115 | Phase=Flash | TotalTPS=225000
+[1086s] Sent=1138160 | Skipped=0 | Served=921523 | Rejected=22001 | Lost=0 | Violations=77141 | PredictedProfit=21546850 | RealizedProfit=25701114 | Phase=Flash | TotalTPS=225000
+[1091s] Sent=1126574 | Skipped=0 | Served=901603 | Rejected=15941 | Lost=0 | Violations=78978 | PredictedProfit=21208268 | RealizedProfit=25292292 | Phase=Flash | TotalTPS=225000
+[1096s] Sent=1128162 | Skipped=0 | Served=920558 | Rejected=13513 | Lost=0 | Violations=85893 | PredictedProfit=21647504 | RealizedProfit=25828056 | Phase=Flash | TotalTPS=225000
+[1101s] Sent=1126796 | Skipped=0 | Served=913868 | Rejected=18176 | Lost=0 | Violations=77918 | PredictedProfit=21663452 | RealizedProfit=25662702 | Phase=Flash | TotalTPS=225000
+[1106s] Sent=1127998 | Skipped=0 | Served=908621 | Rejected=16264 | Lost=0 | Violations=83704 | PredictedProfit=21377112 | RealizedProfit=25375027 | Phase=Flash | TotalTPS=225000
+[1111s] Sent=1128151 | Skipped=0 | Served=909899 | Rejected=13834 | Lost=0 | Violations=82556 | PredictedProfit=21545185 | RealizedProfit=25650327 | Phase=Flash | TotalTPS=225000
+
+========================================
+Starting Phase 7/10: Collapse
+   Duration: 120s | Total TPS: 63000 | Read share: 81%
+   Mix 'collapse': app1/read/sla1=25.0%, app1/read/sla2=6.0%, app1/write/sla1=5.0%, app2/read/sla1=20.0%, app2/write/sla1=1.0%, app3/read/sla1=15.0%, app3/write/sla1=6.0%, app4/read/sla1=15.0%, app4/write/sla1=7.0%
+========================================
+[1116s] Sent=670278 | Skipped=0 | Served=596765 | Rejected=21618 | Lost=0 | Violations=41374 | PredictedProfit=13090190 | RealizedProfit=15668680 | Phase=Collapse | TotalTPS=63000
+[1121s] Sent=315191 | Skipped=0 | Served=315204 | Rejected=0 | Lost=0 | Violations=40 | PredictedProfit=7358703 | RealizedProfit=7840058 | Phase=Collapse | TotalTPS=63000
+[1126s] Sent=315180 | Skipped=0 | Served=314385 | Rejected=183 | Lost=0 | Violations=478 | PredictedProfit=7429958 | RealizedProfit=7816688 | Phase=Collapse | TotalTPS=63000
+[1131s] Sent=315150 | Skipped=0 | Served=314751 | Rejected=18 | Lost=0 | Violations=505 | PredictedProfit=7480943 | RealizedProfit=7823791 | Phase=Collapse | TotalTPS=63000
+[1136s] Sent=315183 | Skipped=0 | Served=314352 | Rejected=125 | Lost=0 | Violations=648 | PredictedProfit=7529443 | RealizedProfit=7864467 | Phase=Collapse | TotalTPS=63000
+[1141s] Sent=315120 | Skipped=0 | Served=311816 | Rejected=2359 | Lost=0 | Violations=917 | PredictedProfit=7551327 | RealizedProfit=7893268 | Phase=Collapse | TotalTPS=63000
+[1146s] Sent=315116 | Skipped=0 | Served=311607 | Rejected=2638 | Lost=0 | Violations=895 | PredictedProfit=7518402 | RealizedProfit=7871596 | Phase=Collapse | TotalTPS=63000
+[1151s] Sent=315013 | Skipped=0 | Served=310270 | Rejected=3799 | Lost=0 | Violations=1056 | PredictedProfit=7434293 | RealizedProfit=7785865 | Phase=Collapse | TotalTPS=63000
+[1156s] Sent=315000 | Skipped=0 | Served=310335 | Rejected=3404 | Lost=0 | Violations=1313 | PredictedProfit=7433319 | RealizedProfit=7794884 | Phase=Collapse | TotalTPS=63000
+[1161s] Sent=315018 | Skipped=0 | Served=312277 | Rejected=2083 | Lost=0 | Violations=640 | PredictedProfit=7518987 | RealizedProfit=7888700 | Phase=Collapse | TotalTPS=63000
+[1166s] Sent=315152 | Skipped=0 | Served=311567 | Rejected=2645 | Lost=0 | Violations=854 | PredictedProfit=7537382 | RealizedProfit=7896610 | Phase=Collapse | TotalTPS=63000
+[1171s] Sent=315116 | Skipped=0 | Served=312364 | Rejected=1879 | Lost=0 | Violations=863 | PredictedProfit=7574638 | RealizedProfit=7935529 | Phase=Collapse | TotalTPS=63000
+[1176s] Sent=315073 | Skipped=0 | Served=311044 | Rejected=2896 | Lost=0 | Violations=1141 | PredictedProfit=7527021 | RealizedProfit=7886744 | Phase=Collapse | TotalTPS=63000
+[1181s] Sent=315061 | Skipped=0 | Served=312022 | Rejected=2321 | Lost=0 | Violations=761 | PredictedProfit=7540274 | RealizedProfit=7902020 | Phase=Collapse | TotalTPS=63000
+[1186s] Sent=315000 | Skipped=0 | Served=310115 | Rejected=3847 | Lost=0 | Violations=1046 | PredictedProfit=7476510 | RealizedProfit=7839089 | Phase=Collapse | TotalTPS=63000
+[1191s] Sent=315000 | Skipped=0 | Served=306858 | Rejected=6390 | Lost=0 | Violations=1806 | PredictedProfit=7336742 | RealizedProfit=7707770 | Phase=Collapse | TotalTPS=63000
+[1196s] Sent=315000 | Skipped=0 | Served=306843 | Rejected=6454 | Lost=0 | Violations=1704 | PredictedProfit=7301391 | RealizedProfit=7690677 | Phase=Collapse | TotalTPS=63000
+[1201s] Sent=315000 | Skipped=0 | Served=312298 | Rejected=1762 | Lost=0 | Violations=940 | PredictedProfit=7483826 | RealizedProfit=7874776 | Phase=Collapse | TotalTPS=63000
+[1206s] Sent=315081 | Skipped=0 | Served=312930 | Rejected=1381 | Lost=0 | Violations=709 | PredictedProfit=7574567 | RealizedProfit=7945870 | Phase=Collapse | TotalTPS=63000
+[1211s] Sent=315151 | Skipped=0 | Served=311401 | Rejected=2617 | Lost=0 | Violations=1094 | PredictedProfit=7479745 | RealizedProfit=7842497 | Phase=Collapse | TotalTPS=63000
+[1216s] Sent=315063 | Skipped=0 | Served=311719 | Rejected=2549 | Lost=0 | Violations=788 | PredictedProfit=7542347 | RealizedProfit=7909508 | Phase=Collapse | TotalTPS=63000
+[1221s] Sent=315119 | Skipped=0 | Served=312796 | Rejected=1690 | Lost=0 | Violations=615 | PredictedProfit=7542983 | RealizedProfit=7904652 | Phase=Collapse | TotalTPS=63000
+[1226s] Sent=315158 | Skipped=0 | Served=311578 | Rejected=2616 | Lost=0 | Violations=930 | PredictedProfit=7522475 | RealizedProfit=7883934 | Phase=Collapse | TotalTPS=63000
+[1231s] Sent=315118 | Skipped=0 | Served=311228 | Rejected=2861 | Lost=0 | Violations=1053 | PredictedProfit=7511680 | RealizedProfit=7868483 | Phase=Collapse | TotalTPS=63000
+
+========================================
+Starting Phase 8/10: Payday
+   Duration: 300s | Total TPS: 54000 | Read share: 82%
+   Mix 'payday': app1/read/sla1=22.0%, app1/read/sla2=3.0%, app1/write/sla1=3.0%, app2/read/sla1=22.0%, app2/write/sla1=1.0%, app3/read/sla1=10.0%, app3/write/sla1=4.0%, app4/read/sla1=25.0%, app4/write/sla1=10.0%
+========================================
+[1236s] Sent=294505 | Skipped=0 | Served=292114 | Rejected=1426 | Lost=0 | Violations=986 | PredictedProfit=7820772 | RealizedProfit=8197398 | Phase=Payday | TotalTPS=54000
+[1241s] Sent=270127 | Skipped=0 | Served=268131 | Rejected=1355 | Lost=0 | Violations=686 | PredictedProfit=8187666 | RealizedProfit=8567677 | Phase=Payday | TotalTPS=54000
+[1246s] Sent=270120 | Skipped=0 | Served=268856 | Rejected=719 | Lost=0 | Violations=503 | PredictedProfit=8177101 | RealizedProfit=8562301 | Phase=Payday | TotalTPS=54000
+[1251s] Sent=270092 | Skipped=0 | Served=268864 | Rejected=589 | Lost=0 | Violations=628 | PredictedProfit=8203821 | RealizedProfit=8575972 | Phase=Payday | TotalTPS=54000
+[1256s] Sent=270173 | Skipped=0 | Served=269536 | Rejected=191 | Lost=0 | Violations=457 | PredictedProfit=8268130 | RealizedProfit=8641679 | Phase=Payday | TotalTPS=54000
+[1261s] Sent=270134 | Skipped=0 | Served=267434 | Rejected=1750 | Lost=0 | Violations=878 | PredictedProfit=8136528 | RealizedProfit=8503705 | Phase=Payday | TotalTPS=54000
+[1266s] Sent=270292 | Skipped=0 | Served=268730 | Rejected=848 | Lost=0 | Violations=560 | PredictedProfit=8208030 | RealizedProfit=8582019 | Phase=Payday | TotalTPS=54000
+[1271s] Sent=270213 | Skipped=0 | Served=269200 | Rejected=380 | Lost=0 | Violations=543 | PredictedProfit=8248440 | RealizedProfit=8620583 | Phase=Payday | TotalTPS=54000
+[1276s] Sent=270307 | Skipped=0 | Served=268764 | Rejected=934 | Lost=0 | Violations=475 | PredictedProfit=8227852 | RealizedProfit=8597872 | Phase=Payday | TotalTPS=54000
+[1281s] Sent=270216 | Skipped=0 | Served=269202 | Rejected=371 | Lost=0 | Violations=707 | PredictedProfit=8255752 | RealizedProfit=8616792 | Phase=Payday | TotalTPS=54000
+[1286s] Sent=270115 | Skipped=0 | Served=268860 | Rejected=264 | Lost=0 | Violations=966 | PredictedProfit=8206066 | RealizedProfit=8567495 | Phase=Payday | TotalTPS=54000
+[1291s] Sent=270016 | Skipped=0 | Served=268731 | Rejected=500 | Lost=0 | Violations=956 | PredictedProfit=8267065 | RealizedProfit=8624834 | Phase=Payday | TotalTPS=54000
+[1296s] Sent=270000 | Skipped=0 | Served=268519 | Rejected=713 | Lost=0 | Violations=908 | PredictedProfit=8260191 | RealizedProfit=8618393 | Phase=Payday | TotalTPS=54000
+[1301s] Sent=270000 | Skipped=0 | Served=268447 | Rejected=1106 | Lost=0 | Violations=656 | PredictedProfit=8209181 | RealizedProfit=8564124 | Phase=Payday | TotalTPS=54000
+[1306s] Sent=270000 | Skipped=0 | Served=269157 | Rejected=354 | Lost=0 | Violations=491 | PredictedProfit=8224469 | RealizedProfit=8588678 | Phase=Payday | TotalTPS=54000
+[1311s] Sent=270042 | Skipped=0 | Served=267642 | Rejected=1358 | Lost=0 | Violations=1000 | PredictedProfit=8157060 | RealizedProfit=8527083 | Phase=Payday | TotalTPS=54000
+[1316s] Sent=270122 | Skipped=0 | Served=269024 | Rejected=491 | Lost=0 | Violations=532 | PredictedProfit=8289341 | RealizedProfit=8660988 | Phase=Payday | TotalTPS=54000
+[1321s] Sent=270183 | Skipped=0 | Served=269464 | Rejected=184 | Lost=0 | Violations=432 | PredictedProfit=8275285 | RealizedProfit=8633834 | Phase=Payday | TotalTPS=54000
+[1326s] Sent=270359 | Skipped=0 | Served=269527 | Rejected=152 | Lost=0 | Violations=470 | PredictedProfit=8315115 | RealizedProfit=8677950 | Phase=Payday | TotalTPS=54000
+[1331s] Sent=270228 | Skipped=0 | Served=268749 | Rejected=709 | Lost=0 | Violations=703 | PredictedProfit=8263836 | RealizedProfit=8616006 | Phase=Payday | TotalTPS=54000
+[1336s] Sent=270146 | Skipped=0 | Served=269263 | Rejected=301 | Lost=0 | Violations=585 | PredictedProfit=8277301 | RealizedProfit=8634982 | Phase=Payday | TotalTPS=54000
+[1341s] Sent=270093 | Skipped=0 | Served=268902 | Rejected=546 | Lost=0 | Violations=678 | PredictedProfit=8276025 | RealizedProfit=8637917 | Phase=Payday | TotalTPS=54000
+[1346s] Sent=270055 | Skipped=0 | Served=269499 | Rejected=368 | Lost=0 | Violations=519 | PredictedProfit=8356266 | RealizedProfit=8717471 | Phase=Payday | TotalTPS=54000
+[1351s] Sent=270199 | Skipped=0 | Served=268253 | Rejected=795 | Lost=0 | Violations=982 | PredictedProfit=8226595 | RealizedProfit=8590749 | Phase=Payday | TotalTPS=54000
+[1356s] Sent=270163 | Skipped=0 | Served=269146 | Rejected=228 | Lost=0 | Violations=733 | PredictedProfit=8268929 | RealizedProfit=8630628 | Phase=Payday | TotalTPS=54000
+[1361s] Sent=270139 | Skipped=0 | Served=269417 | Rejected=283 | Lost=0 | Violations=496 | PredictedProfit=8282516 | RealizedProfit=8645951 | Phase=Payday | TotalTPS=54000
+[1366s] Sent=270071 | Skipped=0 | Served=267908 | Rejected=1201 | Lost=0 | Violations=1091 | PredictedProfit=8208467 | RealizedProfit=8562425 | Phase=Payday | TotalTPS=54000
+[1371s] Sent=270132 | Skipped=0 | Served=268675 | Rejected=824 | Lost=0 | Violations=698 | PredictedProfit=8228146 | RealizedProfit=8595421 | Phase=Payday | TotalTPS=54000
+[1376s] Sent=270148 | Skipped=0 | Served=269086 | Rejected=272 | Lost=0 | Violations=745 | PredictedProfit=8245616 | RealizedProfit=8607110 | Phase=Payday | TotalTPS=54000
+[1381s] Sent=270096 | Skipped=0 | Served=268465 | Rejected=881 | Lost=0 | Violations=755 | PredictedProfit=8261146 | RealizedProfit=8623827 | Phase=Payday | TotalTPS=54000
+[1386s] Sent=270152 | Skipped=0 | Served=268991 | Rejected=349 | Lost=0 | Violations=761 | PredictedProfit=8288762 | RealizedProfit=8650111 | Phase=Payday | TotalTPS=54000
+[1391s] Sent=270077 | Skipped=0 | Served=269012 | Rejected=312 | Lost=0 | Violations=809 | PredictedProfit=8294101 | RealizedProfit=8655903 | Phase=Payday | TotalTPS=54000
+[1396s] Sent=270098 | Skipped=0 | Served=267987 | Rejected=1124 | Lost=0 | Violations=978 | PredictedProfit=8196677 | RealizedProfit=8556614 | Phase=Payday | TotalTPS=54000
+[1401s] Sent=270017 | Skipped=0 | Served=267234 | Rejected=2110 | Lost=0 | Violations=791 | PredictedProfit=8177734 | RealizedProfit=8552527 | Phase=Payday | TotalTPS=54000
+[1406s] Sent=270000 | Skipped=0 | Served=269175 | Rejected=426 | Lost=0 | Violations=429 | PredictedProfit=8282933 | RealizedProfit=8656072 | Phase=Payday | TotalTPS=54000
+[1411s] Sent=270000 | Skipped=0 | Served=267917 | Rejected=1390 | Lost=0 | Violations=693 | PredictedProfit=8242634 | RealizedProfit=8616183 | Phase=Payday | TotalTPS=54000
+[1416s] Sent=270107 | Skipped=0 | Served=269515 | Rejected=115 | Lost=0 | Violations=397 | PredictedProfit=8282617 | RealizedProfit=8657545 | Phase=Payday | TotalTPS=54000
+[1421s] Sent=270110 | Skipped=0 | Served=268789 | Rejected=728 | Lost=0 | Violations=548 | PredictedProfit=8219882 | RealizedProfit=8587214 | Phase=Payday | TotalTPS=54000
+[1426s] Sent=270113 | Skipped=0 | Served=268847 | Rejected=351 | Lost=0 | Violations=921 | PredictedProfit=8265149 | RealizedProfit=8624753 | Phase=Payday | TotalTPS=54000
+[1431s] Sent=270030 | Skipped=0 | Served=268717 | Rejected=636 | Lost=0 | Violations=727 | PredictedProfit=8241031 | RealizedProfit=8606430 | Phase=Payday | TotalTPS=54000
+[1436s] Sent=270000 | Skipped=0 | Served=267577 | Rejected=1408 | Lost=0 | Violations=1045 | PredictedProfit=8190338 | RealizedProfit=8555530 | Phase=Payday | TotalTPS=54000
+[1441s] Sent=270000 | Skipped=0 | Served=268983 | Rejected=408 | Lost=0 | Violations=648 | PredictedProfit=8224384 | RealizedProfit=8590959 | Phase=Payday | TotalTPS=54000
+[1446s] Sent=270000 | Skipped=0 | Served=268762 | Rejected=405 | Lost=0 | Violations=833 | PredictedProfit=8283149 | RealizedProfit=8643551 | Phase=Payday | TotalTPS=54000
+[1451s] Sent=270000 | Skipped=0 | Served=268534 | Rejected=840 | Lost=0 | Violations=626 | PredictedProfit=8231576 | RealizedProfit=8595369 | Phase=Payday | TotalTPS=54000
+[1456s] Sent=270029 | Skipped=0 | Served=268551 | Rejected=729 | Lost=0 | Violations=720 | PredictedProfit=8233333 | RealizedProfit=8596658 | Phase=Payday | TotalTPS=54000
+[1461s] Sent=270103 | Skipped=0 | Served=268896 | Rejected=674 | Lost=0 | Violations=464 | PredictedProfit=8263991 | RealizedProfit=8629093 | Phase=Payday | TotalTPS=54000
+[1466s] Sent=270121 | Skipped=0 | Served=268455 | Rejected=834 | Lost=0 | Violations=806 | PredictedProfit=8272184 | RealizedProfit=8634151 | Phase=Payday | TotalTPS=54000
+[1471s] Sent=270117 | Skipped=0 | Served=268190 | Rejected=1144 | Lost=0 | Violations=746 | PredictedProfit=8241669 | RealizedProfit=8611497 | Phase=Payday | TotalTPS=54000
+[1476s] Sent=270057 | Skipped=0 | Served=268022 | Rejected=1032 | Lost=0 | Violations=1078 | PredictedProfit=8237766 | RealizedProfit=8603363 | Phase=Payday | TotalTPS=54000
+[1481s] Sent=270133 | Skipped=0 | Served=268202 | Rejected=827 | Lost=0 | Violations=1035 | PredictedProfit=8265870 | RealizedProfit=8631102 | Phase=Payday | TotalTPS=54000
+[1486s] Sent=270144 | Skipped=0 | Served=267320 | Rejected=1755 | Lost=0 | Violations=1014 | PredictedProfit=8214582 | RealizedProfit=8583586 | Phase=Payday | TotalTPS=54000
+[1491s] Sent=270016 | Skipped=0 | Served=268475 | Rejected=697 | Lost=0 | Violations=950 | PredictedProfit=8253592 | RealizedProfit=8620876 | Phase=Payday | TotalTPS=54000
+[1496s] Sent=270095 | Skipped=0 | Served=268137 | Rejected=1283 | Lost=0 | Violations=702 | PredictedProfit=8232505 | RealizedProfit=8603981 | Phase=Payday | TotalTPS=54000
+[1501s] Sent=270146 | Skipped=0 | Served=267145 | Rejected=1918 | Lost=0 | Violations=1005 | PredictedProfit=8201452 | RealizedProfit=8574461 | Phase=Payday | TotalTPS=54000
+[1506s] Sent=270100 | Skipped=0 | Served=265454 | Rejected=3274 | Lost=0 | Violations=1423 | PredictedProfit=8122268 | RealizedProfit=8509529 | Phase=Payday | TotalTPS=54000
+[1511s] Sent=270102 | Skipped=0 | Served=266103 | Rejected=2227 | Lost=0 | Violations=1735 | PredictedProfit=8125233 | RealizedProfit=8508361 | Phase=Payday | TotalTPS=54000
+[1516s] Sent=270100 | Skipped=0 | Served=268901 | Rejected=512 | Lost=0 | Violations=686 | PredictedProfit=8242349 | RealizedProfit=8630430 | Phase=Payday | TotalTPS=54000
+[1521s] Sent=270212 | Skipped=0 | Served=268985 | Rejected=350 | Lost=0 | Violations=794 | PredictedProfit=8257758 | RealizedProfit=8635267 | Phase=Payday | TotalTPS=54000
+[1526s] Sent=270300 | Skipped=0 | Served=267862 | Rejected=1266 | Lost=0 | Violations=1005 | PredictedProfit=8203970 | RealizedProfit=8581453 | Phase=Payday | TotalTPS=54000
+[1531s] Sent=270234 | Skipped=0 | Served=268489 | Rejected=973 | Lost=0 | Violations=710 | PredictedProfit=8290761 | RealizedProfit=8661403 | Phase=Payday | TotalTPS=54000
+
+========================================
+Starting Phase 9/10: ReturnToNormal
+   Duration: 300s | Total TPS: 45000 | Read share: 87%
+   Mix 'normal': app1/read/sla1=32.0%, app1/read/sla2=4.0%, app1/write/sla1=4.0%, app2/read/sla1=33.0%, app2/write/sla1=2.0%, app3/read/sla1=14.0%, app3/write/sla1=6.0%, app4/read/sla1=4.0%, app4/write/sla1=1.0%
+========================================
+[1536s] Sent=253560 | Skipped=0 | Served=253497 | Rejected=79 | Lost=0 | Violations=249 | PredictedProfit=6116269 | RealizedProfit=6400691 | Phase=ReturnToNormal | TotalTPS=45000
+[1541s] Sent=225056 | Skipped=0 | Served=225094 | Rejected=0 | Lost=0 | Violations=19 | PredictedProfit=2442358 | RealizedProfit=2579903 | Phase=ReturnToNormal | TotalTPS=45000
+[1546s] Sent=225035 | Skipped=0 | Served=225103 | Rejected=0 | Lost=0 | Violations=25 | PredictedProfit=2457303 | RealizedProfit=2591514 | Phase=ReturnToNormal | TotalTPS=45000
+[1551s] Sent=225000 | Skipped=0 | Served=225012 | Rejected=0 | Lost=0 | Violations=27 | PredictedProfit=2439292 | RealizedProfit=2575547 | Phase=ReturnToNormal | TotalTPS=45000
+[1556s] Sent=225000 | Skipped=0 | Served=224942 | Rejected=0 | Lost=0 | Violations=58 | PredictedProfit=2471315 | RealizedProfit=2606631 | Phase=ReturnToNormal | TotalTPS=45000
+[1561s] Sent=225000 | Skipped=0 | Served=224960 | Rejected=0 | Lost=0 | Violations=40 | PredictedProfit=2454114 | RealizedProfit=2588871 | Phase=ReturnToNormal | TotalTPS=45000
+[1566s] Sent=225000 | Skipped=0 | Served=224972 | Rejected=0 | Lost=0 | Violations=28 | PredictedProfit=2449542 | RealizedProfit=2582717 | Phase=ReturnToNormal | TotalTPS=45000
+[1571s] Sent=225008 | Skipped=0 | Served=224910 | Rejected=0 | Lost=0 | Violations=90 | PredictedProfit=2472858 | RealizedProfit=2607098 | Phase=ReturnToNormal | TotalTPS=45000
+[1576s] Sent=225167 | Skipped=0 | Served=225034 | Rejected=0 | Lost=0 | Violations=71 | PredictedProfit=2461529 | RealizedProfit=2594189 | Phase=ReturnToNormal | TotalTPS=45000
+[1581s] Sent=225184 | Skipped=0 | Served=225046 | Rejected=0 | Lost=0 | Violations=60 | PredictedProfit=2467881 | RealizedProfit=2602238 | Phase=ReturnToNormal | TotalTPS=45000
+[1586s] Sent=225172 | Skipped=0 | Served=225084 | Rejected=0 | Lost=0 | Violations=59 | PredictedProfit=2464701 | RealizedProfit=2597939 | Phase=ReturnToNormal | TotalTPS=45000
+[1591s] Sent=225369 | Skipped=0 | Served=225303 | Rejected=0 | Lost=0 | Violations=51 | PredictedProfit=2469453 | RealizedProfit=2605608 | Phase=ReturnToNormal | TotalTPS=45000
+[1596s] Sent=225006 | Skipped=0 | Served=225109 | Rejected=0 | Lost=0 | Violations=51 | PredictedProfit=2461084 | RealizedProfit=2594973 | Phase=ReturnToNormal | TotalTPS=45000
+[1601s] Sent=225104 | Skipped=0 | Served=224991 | Rejected=0 | Lost=0 | Violations=74 | PredictedProfit=2449343 | RealizedProfit=2583131 | Phase=ReturnToNormal | TotalTPS=45000
+[1606s] Sent=225068 | Skipped=0 | Served=224977 | Rejected=0 | Lost=0 | Violations=83 | PredictedProfit=2460847 | RealizedProfit=2592853 | Phase=ReturnToNormal | TotalTPS=45000
+[1611s] Sent=225182 | Skipped=0 | Served=225096 | Rejected=0 | Lost=0 | Violations=68 | PredictedProfit=2485255 | RealizedProfit=2619278 | Phase=ReturnToNormal | TotalTPS=45000
+[1616s] Sent=225159 | Skipped=0 | Served=225077 | Rejected=0 | Lost=0 | Violations=76 | PredictedProfit=2443159 | RealizedProfit=2575428 | Phase=ReturnToNormal | TotalTPS=45000
+[1621s] Sent=224978 | Skipped=0 | Served=224946 | Rejected=0 | Lost=0 | Violations=128 | PredictedProfit=2443167 | RealizedProfit=2576437 | Phase=ReturnToNormal | TotalTPS=45000
+[1626s] Sent=224986 | Skipped=0 | Served=224936 | Rejected=0 | Lost=0 | Violations=64 | PredictedProfit=2452683 | RealizedProfit=2585984 | Phase=ReturnToNormal | TotalTPS=45000
+[1631s] Sent=225098 | Skipped=0 | Served=224905 | Rejected=0 | Lost=0 | Violations=100 | PredictedProfit=2466086 | RealizedProfit=2599075 | Phase=ReturnToNormal | TotalTPS=45000
+[1636s] Sent=225262 | Skipped=0 | Served=225168 | Rejected=0 | Lost=0 | Violations=107 | PredictedProfit=2446103 | RealizedProfit=2580849 | Phase=ReturnToNormal | TotalTPS=45000
+[1641s] Sent=224964 | Skipped=0 | Served=224860 | Rejected=0 | Lost=0 | Violations=111 | PredictedProfit=2468987 | RealizedProfit=2601466 | Phase=ReturnToNormal | TotalTPS=45000
+[1646s] Sent=225168 | Skipped=0 | Served=225028 | Rejected=0 | Lost=0 | Violations=133 | PredictedProfit=2463374 | RealizedProfit=2597970 | Phase=ReturnToNormal | TotalTPS=45000
+[1651s] Sent=224999 | Skipped=0 | Served=224891 | Rejected=0 | Lost=0 | Violations=112 | PredictedProfit=2442121 | RealizedProfit=2576144 | Phase=ReturnToNormal | TotalTPS=45000
+[1656s] Sent=225213 | Skipped=0 | Served=225090 | Rejected=0 | Lost=0 | Violations=107 | PredictedProfit=2456372 | RealizedProfit=2589753 | Phase=ReturnToNormal | TotalTPS=45000
+[1661s] Sent=225013 | Skipped=0 | Served=224967 | Rejected=0 | Lost=0 | Violations=84 | PredictedProfit=2457848 | RealizedProfit=2592454 | Phase=ReturnToNormal | TotalTPS=45000
+[1666s] Sent=225000 | Skipped=0 | Served=224963 | Rejected=0 | Lost=0 | Violations=72 | PredictedProfit=2447797 | RealizedProfit=2579530 | Phase=ReturnToNormal | TotalTPS=45000
+[1671s] Sent=225000 | Skipped=0 | Served=224979 | Rejected=0 | Lost=0 | Violations=39 | PredictedProfit=2474179 | RealizedProfit=2606409 | Phase=ReturnToNormal | TotalTPS=45000
+[1676s] Sent=225000 | Skipped=0 | Served=224917 | Rejected=0 | Lost=0 | Violations=83 | PredictedProfit=2456147 | RealizedProfit=2587976 | Phase=ReturnToNormal | TotalTPS=45000
+[1681s] Sent=225115 | Skipped=0 | Served=224911 | Rejected=0 | Lost=0 | Violations=105 | PredictedProfit=2453263 | RealizedProfit=2585410 | Phase=ReturnToNormal | TotalTPS=45000
+[1686s] Sent=225119 | Skipped=0 | Served=225042 | Rejected=0 | Lost=0 | Violations=58 | PredictedProfit=2466518 | RealizedProfit=2600476 | Phase=ReturnToNormal | TotalTPS=45000
+[1691s] Sent=225066 | Skipped=0 | Served=225113 | Rejected=0 | Lost=0 | Violations=71 | PredictedProfit=2456777 | RealizedProfit=2587707 | Phase=ReturnToNormal | TotalTPS=45000
+[1696s] Sent=225000 | Skipped=0 | Served=224946 | Rejected=0 | Lost=0 | Violations=54 | PredictedProfit=2468732 | RealizedProfit=2601515 | Phase=ReturnToNormal | TotalTPS=45000
+[1701s] Sent=225000 | Skipped=0 | Served=224927 | Rejected=0 | Lost=0 | Violations=73 | PredictedProfit=2456270 | RealizedProfit=2589559 | Phase=ReturnToNormal | TotalTPS=45000
+[1706s] Sent=225000 | Skipped=0 | Served=224919 | Rejected=0 | Lost=0 | Violations=81 | PredictedProfit=2475503 | RealizedProfit=2608398 | Phase=ReturnToNormal | TotalTPS=45000
+[1711s] Sent=225000 | Skipped=0 | Served=224909 | Rejected=0 | Lost=0 | Violations=91 | PredictedProfit=2458979 | RealizedProfit=2593141 | Phase=ReturnToNormal | TotalTPS=45000
+[1716s] Sent=225101 | Skipped=0 | Served=224940 | Rejected=0 | Lost=0 | Violations=86 | PredictedProfit=2456011 | RealizedProfit=2590172 | Phase=ReturnToNormal | TotalTPS=45000
+[1721s] Sent=225143 | Skipped=0 | Served=225028 | Rejected=0 | Lost=0 | Violations=85 | PredictedProfit=2459499 | RealizedProfit=2595149 | Phase=ReturnToNormal | TotalTPS=45000
+[1726s] Sent=225051 | Skipped=0 | Served=224977 | Rejected=0 | Lost=0 | Violations=54 | PredictedProfit=2458451 | RealizedProfit=2593577 | Phase=ReturnToNormal | TotalTPS=45000
+[1731s] Sent=225063 | Skipped=0 | Served=225037 | Rejected=0 | Lost=0 | Violations=93 | PredictedProfit=2465488 | RealizedProfit=2596431 | Phase=ReturnToNormal | TotalTPS=45000
+[1736s] Sent=225083 | Skipped=0 | Served=224975 | Rejected=0 | Lost=0 | Violations=65 | PredictedProfit=2469397 | RealizedProfit=2603635 | Phase=ReturnToNormal | TotalTPS=45000
+[1741s] Sent=225109 | Skipped=0 | Served=224995 | Rejected=0 | Lost=0 | Violations=96 | PredictedProfit=2464780 | RealizedProfit=2596694 | Phase=ReturnToNormal | TotalTPS=45000
+[1746s] Sent=225050 | Skipped=0 | Served=225062 | Rejected=0 | Lost=0 | Violations=90 | PredictedProfit=2467104 | RealizedProfit=2600081 | Phase=ReturnToNormal | TotalTPS=45000
+[1751s] Sent=225023 | Skipped=0 | Served=224951 | Rejected=0 | Lost=0 | Violations=66 | PredictedProfit=2450973 | RealizedProfit=2581267 | Phase=ReturnToNormal | TotalTPS=45000
+[1756s] Sent=225108 | Skipped=0 | Served=225006 | Rejected=0 | Lost=0 | Violations=56 | PredictedProfit=2473271 | RealizedProfit=2609338 | Phase=ReturnToNormal | TotalTPS=45000
+[1761s] Sent=225076 | Skipped=0 | Served=225000 | Rejected=0 | Lost=0 | Violations=74 | PredictedProfit=2447880 | RealizedProfit=2580130 | Phase=ReturnToNormal | TotalTPS=45000
+[1766s] Sent=225093 | Skipped=0 | Served=225059 | Rejected=0 | Lost=0 | Violations=61 | PredictedProfit=2453077 | RealizedProfit=2586464 | Phase=ReturnToNormal | TotalTPS=45000
+[1771s] Sent=225126 | Skipped=0 | Served=224985 | Rejected=0 | Lost=0 | Violations=79 | PredictedProfit=2459576 | RealizedProfit=2593173 | Phase=ReturnToNormal | TotalTPS=45000
+[1776s] Sent=225077 | Skipped=0 | Served=225048 | Rejected=0 | Lost=0 | Violations=65 | PredictedProfit=2457468 | RealizedProfit=2588799 | Phase=ReturnToNormal | TotalTPS=45000
+[1781s] Sent=225234 | Skipped=0 | Served=225065 | Rejected=0 | Lost=0 | Violations=67 | PredictedProfit=2454402 | RealizedProfit=2589903 | Phase=ReturnToNormal | TotalTPS=45000
+[1786s] Sent=225216 | Skipped=0 | Served=225068 | Rejected=0 | Lost=0 | Violations=103 | PredictedProfit=2459280 | RealizedProfit=2594159 | Phase=ReturnToNormal | TotalTPS=45000
+[1791s] Sent=225258 | Skipped=0 | Served=225082 | Rejected=0 | Lost=0 | Violations=79 | PredictedProfit=2467392 | RealizedProfit=2596839 | Phase=ReturnToNormal | TotalTPS=45000
+[1796s] Sent=225245 | Skipped=0 | Served=225314 | Rejected=0 | Lost=0 | Violations=50 | PredictedProfit=2448862 | RealizedProfit=2584163 | Phase=ReturnToNormal | TotalTPS=45000
+[1801s] Sent=225044 | Skipped=0 | Served=225036 | Rejected=0 | Lost=0 | Violations=111 | PredictedProfit=2465225 | RealizedProfit=2595229 | Phase=ReturnToNormal | TotalTPS=45000
+[1806s] Sent=225000 | Skipped=0 | Served=224970 | Rejected=0 | Lost=0 | Violations=98 | PredictedProfit=2474591 | RealizedProfit=2605542 | Phase=ReturnToNormal | TotalTPS=45000
+[1811s] Sent=225000 | Skipped=0 | Served=224921 | Rejected=0 | Lost=0 | Violations=103 | PredictedProfit=2461401 | RealizedProfit=2596720 | Phase=ReturnToNormal | TotalTPS=45000
+[1816s] Sent=225000 | Skipped=0 | Served=224923 | Rejected=0 | Lost=0 | Violations=77 | PredictedProfit=2463298 | RealizedProfit=2594982 | Phase=ReturnToNormal | TotalTPS=45000
+[1821s] Sent=225000 | Skipped=0 | Served=224733 | Rejected=177 | Lost=0 | Violations=90 | PredictedProfit=2449090 | RealizedProfit=2581700 | Phase=ReturnToNormal | TotalTPS=45000
+[1826s] Sent=225000 | Skipped=0 | Served=224896 | Rejected=0 | Lost=0 | Violations=104 | PredictedProfit=2456263 | RealizedProfit=2591265 | Phase=ReturnToNormal | TotalTPS=45000
+[1831s] Sent=225025 | Skipped=0 | Served=224875 | Rejected=0 | Lost=0 | Violations=125 | PredictedProfit=2462552 | RealizedProfit=2599863 | Phase=ReturnToNormal | TotalTPS=45000
+
+========================================
+Starting Phase 10/10: CoolDown
+   Duration: 30s | Total TPS: 45000 | Read share: 87%
+   Mix 'normal': app1/read/sla1=32.0%, app1/read/sla2=4.0%, app1/write/sla1=4.0%, app2/read/sla1=33.0%, app2/write/sla1=2.0%, app3/read/sla1=14.0%, app3/write/sla1=6.0%, app4/read/sla1=4.0%, app4/write/sla1=1.0%
+========================================
+[1836s] Sent=225134 | Skipped=0 | Served=224872 | Rejected=0 | Lost=0 | Violations=181 | PredictedProfit=2464847 | RealizedProfit=2599869 | Phase=CoolDown | TotalTPS=45000
+[1841s] Sent=225233 | Skipped=0 | Served=224841 | Rejected=99 | Lost=0 | Violations=124 | PredictedProfit=2459886 | RealizedProfit=2591810 | Phase=CoolDown | TotalTPS=45000
+[1846s] Sent=225277 | Skipped=0 | Served=225024 | Rejected=0 | Lost=0 | Violations=90 | PredictedProfit=2461394 | RealizedProfit=2593566 | Phase=CoolDown | TotalTPS=45000
+[1851s] Sent=225215 | Skipped=0 | Served=225111 | Rejected=0 | Lost=0 | Violations=88 | PredictedProfit=2469229 | RealizedProfit=2601605 | Phase=CoolDown | TotalTPS=45000
+[1856s] Sent=224961 | Skipped=0 | Served=224933 | Rejected=0 | Lost=0 | Violations=44 | PredictedProfit=2458062 | RealizedProfit=2593441 | Phase=CoolDown | TotalTPS=45000
+
+Experiment completed. Sent=148033500 Skipped=110700 Responses=134804829 Rejected=10368201 Lost=0 Violations=1269077 ClientDropped=2607989
+  of which 31200 were skipped during WarmUp and are not counted below
+WARNING: the injector skipped 79500 requests outside WarmUp, of 148144200 the phase schedule called for (0.05%). The measured offered rate is NOT the configured one, so any phase defined as a multiple of C is running at an unknown multiple. Raise workload.injectorThreads or lower the phase rates.
+Driver events at site az0/0: heartbeats 2789 (slowest 10056 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=7594 
+Driver events at site az0/1: heartbeats 2789 (slowest 10116 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=6183 
+Driver events at site az0/2: heartbeats 2789 (slowest 10100 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=5882 
+Driver events at site az0/3: heartbeats 2789 (slowest 10133 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=6951 
+Driver events at site az1/0: heartbeats 2789 (slowest 10094 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=14327 
+Driver events at site az1/1: heartbeats 2788 (slowest 10084 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=15115 
+Driver events at site az1/2: heartbeats 2789 (slowest 10075 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=16447 
+Driver events at site az1/3: heartbeats 2788 (slowest 10110 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=16851 
+Driver events at site az2/0: heartbeats 2788 (slowest 10155 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=22617 
+Driver events at site az2/1: heartbeats 2789 (slowest 10130 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=18049 
+Driver events at site az2/2: heartbeats 2789 (slowest 10076 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=18607 
+Driver events at site az2/3: heartbeats 2788 (slowest 10108 ms)
+  topology membership changes: 1
+      t+0.0s members [] -> [10.10.1.10:27017, 10.10.1.11:27017, 10.10.1.12:27017, 10.10.1.13:27017, 10.10.1.14:27017, 10.10.1.15:27017, 10.10.1.16:27017, 10.10.1.2:27017, 10.10.1.3:27017, 10.10.1.4:27017, 10.10.1.5:27017, 10.10.1.6:27017, 10.10.1.7:27017, 10.10.1.8:27017, 10.10.1.9:27017]
+  checkouts failed by reason: TIMEOUT=17663 
+Transport errors by cause (every attempt, retries included):
+      156245  com.mongodb.MongoTimeoutException: Timed out after # ms while waiting for a connection to server #.#.#.#:#.
+              sample: com.mongodb.MongoTimeoutException: Timed out after 1001 ms while waiting for a connection to server 10.10.1.2:27017.
+              sample: com.mongodb.MongoTimeoutException: Timed out after 1001 ms while waiting for a connection to server 10.10.1.2:27017.
+       10041  com.mongodb.MongoTimeoutException: Timed out after # ms while waiting for a connection to server #.#.#.#:#. <- com.mongodb.MongoTimeoutException: Timeout waitin
+              sample: com.mongodb.MongoTimeoutException: Timed out after 1007 ms while waiting for a connection to server 10.10.1.2:27017. <- com.mongodb.MongoTimeoutException: Timeout waiting for a pooled item after 762107 NANOSECONDS
+              sample: com.mongodb.MongoTimeoutException: Timed out after 1001 ms while waiting for a connection to server 10.10.1.2:27017. <- com.mongodb.MongoTimeoutException: Timeout waiting for a pooled item after 3172190 NANOSECONDS
+           1  mongod error InvalidOptions: readConcern afterClusterTime value must not be greater than the current clusterTime. Requested clusterTime: { ts: Timestamp(#, #) }
+              sample: mongod error InvalidOptions: readConcern afterClusterTime value must not be greater than the current clusterTime. Requested clusterTime: { ts: Timestamp(1791699554, 16798) }; current clusterTime: { ts: Timestamp(1791699554, 16788) }
+Shutting down server processes...
+Shutdown request to node 0 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.2:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 1 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.3:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 2 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.4:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 3 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.5:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 4 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.6:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 5 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.7:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 6 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.8:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 7 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.9:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 8 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.10:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 9 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.11:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 10 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.12:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 11 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.13:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 12 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.14:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 13 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.15:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
+Shutdown request to node 14 reported: Command execution failed on MongoDB server with error 13 (Unauthorized): 'shutdown must run from localhost when running db without auth' on server 10.10.1.16:27017. The full response is {"ok": 0.0, "errmsg": "shutdown must run from localhost when running db without auth", "code": 13, "codeName": "Unauthorized", "$clusterTime": {"clusterTime": {"$timestamp": {"t": 1791700657, "i": 10149}}, "signature": {"hash": {"$binary": {"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "subType": "00"}}, "keyId": 0}}, "operationTime": {"$timestamp": {"t": 1791700657, "i": 10149}}}
